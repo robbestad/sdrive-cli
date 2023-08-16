@@ -105,8 +105,13 @@ async fn upload_file(file_path: PathBuf) -> Result<(), Box<dyn std::error::Error
         Some(path) => path,
         None => panic!("Failed to find the user's home directory."),
     };
+    let file_name = match file_path.file_name() {
+        Some(name) => name.to_string_lossy().to_string(),
+        None => panic!("Failed to get the file name."),
+    };
 
-    println!("sdriveupload v{}", env!("CARGO_PKG_VERSION"));
+
+    println!("sdriveupload v{}. Uploading {}", env!("CARGO_PKG_VERSION"), &file_name);
 
     config_path.push(".config");
     config_path.push("sdrive.toml");
@@ -124,11 +129,6 @@ async fn upload_file(file_path: PathBuf) -> Result<(), Box<dyn std::error::Error
             "Invalid API key",
         )));
     }
-
-    let file_name = match file_path.file_name() {
-        Some(name) => name.to_string_lossy().to_string(),
-        None => panic!("Failed to get the file name."),
-    };
 
 
     // Get file size.
