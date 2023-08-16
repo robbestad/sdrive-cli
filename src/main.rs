@@ -6,6 +6,8 @@ use dirs::home_dir;
 use std::env;
 use dialoguer::Input;
 
+use std::io::{self, Write};
+
 
 use serde::Deserialize;
 use serde_json::json;
@@ -56,7 +58,7 @@ async fn upload_chunk(
     pb: &ProgressBar,
 ) -> Result<(), reqwest::Error> {
     let client = Client::new();
-    println!("Sending {:?}", &file_name);
+    //println!("Sending {:?}", &file_name);
 
     let file_part = Part::stream(chunk.to_owned())
         .file_name(file_name.to_string())
@@ -95,11 +97,15 @@ async fn is_valid_api_key(api_key: &str, username: &str) -> Result<bool, reqwest
     }
 }
 
+
+
+
 async fn upload_file(file_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let mut config_path: PathBuf = match home_dir() {
         Some(path) => path,
         None => panic!("Failed to find the user's home directory."),
     };
+
     println!("sdriveupload v{}", env!("CARGO_PKG_VERSION"));
 
     config_path.push(".config");
@@ -112,7 +118,7 @@ async fn upload_file(file_path: PathBuf) -> Result<(), Box<dyn std::error::Error
     let is_valid = is_valid_api_key(&api_key, &username).await?;
 
     if !is_valid {
-        println!("The API key is invalid.");
+        println!("\rThe API key is invalid.");
         return Err(Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "Invalid API key",
@@ -198,15 +204,15 @@ async fn upload_file(file_path: PathBuf) -> Result<(), Box<dyn std::error::Error
         .send()
         .await?;
 
-    if response.status() == StatusCode::ACCEPTED {
-        println!("Upload completed!")
+  if response.status() == StatusCode::ACCEPTED {
+        print!("\rUpload completed!");
+        io::stdout().flush()?;
     }
     if !config.encrypted {
-        println!("https://download.sdrive.app/public/{}/{}",config.storage_account,file_guid);
+        println!("\rhttps://download.sdrive.app/public/{}/{}",config.storage_account,file_guid);
     }
     Ok(())
 }
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
