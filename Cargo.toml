@@ -23,4 +23,5 @@ indicatif = "0.17.3"
 dirs = "5.0.0"
 sha2 = "0.10.6"
 digest = "0.10.6"
+async-recursion = "1.0.4"
 

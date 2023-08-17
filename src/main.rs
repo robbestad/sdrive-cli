@@ -1,5 +1,6 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use std::borrow::Cow;
+use std::path::Path;
 
 use mime_guess::from_path;
 use reqwest::{Client, StatusCode};
@@ -217,6 +218,24 @@ async fn upload_file(file_path: PathBuf, parent_folder: PathBuf) -> Result<(), B
     Ok(())
 }
 
+
+#[async_recursion::async_recursion]
+async fn handle_directory(dir_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in std::fs::read_dir(dir_path)? {
+        let entry_path = entry?.path();
+        if entry_path.is_file() {
+            let parent_folder = entry_path.parent().unwrap_or(&entry_path);
+println!("Parent folder of {}: {}", &entry_path.display(), parent_folder.display());
+upload_file(entry_path.clone(), parent_folder.to_path_buf()).await?;
+
+        } else if entry_path.is_dir() {
+            handle_directory(&entry_path).await?;  // Recursive call
+        }
+    }
+    Ok(())
+}
+
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -235,14 +254,7 @@ if path.is_file() {
     println!("Parent folder: {}", &parent_folder.display());
     upload_file(path.clone(), parent_folder).await?;
 } else if path.is_dir() {
-    for entry in std::fs::read_dir(&path)? {
-        let entry_path = entry?.path();
-        if entry_path.is_file() {
-            let parent_folder = entry_path.parent().unwrap_or(&entry_path).to_path_buf();
-//            println!("Parent folder of {}: {}", &entry_path.display(), &parent_folder.display());
-            upload_file(entry_path.clone(), parent_folder).await?;
-        }
-    }
+     handle_directory(&path).await?;
 } else {
     eprintln!("The specified path is neither a file nor a directory.");
 }
