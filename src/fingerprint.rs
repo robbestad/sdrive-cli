@@ -1,7 +1,7 @@
+use sha2::{Digest, Sha256};
+use std::env;
 use std::fs::File;
 use std::io::{BufReader, Read};
-use sha2::{Sha256, Digest};
-use std::env;
 
 fn create_sha256_fingerprint(file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
     let mut file = BufReader::new(File::open(&file_path)?);
@@ -20,7 +20,6 @@ fn create_sha256_fingerprint(file_path: &str) -> Result<String, Box<dyn std::err
     let fingerprint = format!("{:x}", hash);
     Ok(fingerprint)
 }
-
 
 fn main() {
     let args: Vec<String> = env::args().collect();
