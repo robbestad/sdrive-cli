@@ -1,13 +1,14 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use std::borrow::Cow;
 use std::path::Path;
-
+use std::fmt;
 use dialoguer::Input;
 use dirs::home_dir;
 use mime_guess::from_path;
 use reqwest::{Client, StatusCode};
 use std::env;
 use std::fs;
+use sha2::{Sha256, Digest};
 
 use std::io::{self, Write};
 
@@ -16,9 +17,35 @@ use serde_json::json;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use uuid::Uuid;
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use reqwest::multipart::{Form, Part};
+
+const MAX_RETRIES: usize = 5;
+
+#[derive(Debug)]
+enum CustomError {
+    ReqwestError(reqwest::Error),
+    IoError(std::io::Error),
+}
+impl fmt::Display for CustomError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CustomError::ReqwestError(e) => write!(f, "Reqwest Error: {}", e),
+            CustomError::IoError(e) => write!(f, "IO Error: {}", e),
+            // ... handle other variants as needed
+        }
+    }
+}
+
+#[derive(Debug)]
+enum FileStatus {
+    AlreadyUploaded,
+    NotUploaded,
+    Error(CustomError),
+}
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -27,6 +54,25 @@ struct Config {
     encrypted: bool,
     username: String,
     api_key: String,
+}
+
+fn compute_sha256(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    format!("{:x}", result)
+}
+fn compute_sha256_for_filename_and_size(file_name: &str, file_size: usize) -> String {
+    let mut data = file_name.as_bytes().to_vec();
+    let size_bytes = file_size.to_le_bytes(); // Convert the usize to its little-endian byte representation
+    data.extend(&size_bytes);
+    compute_sha256(&data)
+}
+
+fn compute_hash<T: Hash>(t: &T) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    t.hash(&mut hasher);
+    hasher.finish()
 }
 
 async fn complete_upload(file_name: &str, chunk_count: usize) -> Result<(), reqwest::Error> {
@@ -54,6 +100,7 @@ async fn upload_chunk(
     i: usize,
     file_name: &str,
     file_guid: &str,
+    api_key: &str,
     pb: &ProgressBar,
 ) -> Result<(), reqwest::Error> {
     let client = Client::new();
@@ -71,6 +118,7 @@ async fn upload_chunk(
             ("id", i.to_string()),
             ("fileName", file_name.to_string()),
             ("identifier", file_guid.to_string()),
+            ("apikey", api_key.to_string()),
         ])
         .multipart(form)
         .send()
@@ -81,7 +129,48 @@ async fn upload_chunk(
     Ok(())
 }
 
-const MAX_RETRIES: usize = 5;
+async fn is_file_uploaded(api_key: &str, file_name: &str, file_size: &usize) -> FileStatus {
+    let file_hash = compute_sha256_for_filename_and_size(&file_name, *file_size);
+    println!("hash {}", &file_hash);
+
+    let url = format!(
+        "https://sdrive.app/api/v3/file-exists?key={}&file_hash={}",
+        api_key, file_hash
+    );
+
+    for attempt in 1..=MAX_RETRIES {
+        let response = reqwest::get(&url).await;
+
+        match response {
+            Ok(res) => match res.status() {
+                reqwest::StatusCode::OK => return FileStatus::AlreadyUploaded,
+                reqwest::StatusCode::NOT_FOUND => return FileStatus::NotUploaded,
+                _ => {
+                    eprintln!(
+                        "Attempt {}: Received unexpected status: {}. Response: {:?}",
+                        attempt,
+                        res.status(),
+                        res.text().await.unwrap_or_default()
+                    );
+                }
+            },
+            Err(e) => {
+                eprintln!("Attempt {}: Error: {}", attempt, e);
+                return FileStatus::Error(CustomError::ReqwestError(e));
+            }
+        }
+
+        // If not the last attempt, sleep before retrying.
+        if attempt < MAX_RETRIES {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+    }
+    eprintln!("Unexpected state reached in is_file_uploaded");
+    FileStatus::Error(CustomError::IoError(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "Unexpected state in is_file_uploaded",
+    )))
+}
 
 async fn is_valid_api_key(api_key: &str, username: &str) -> Result<bool, reqwest::Error> {
     let url = format!(
@@ -118,7 +207,6 @@ async fn is_valid_api_key(api_key: &str, username: &str) -> Result<bool, reqwest
 
     Ok(false)
 }
-
 
 async fn upload_file(
     file_path: PathBuf,
@@ -175,8 +263,31 @@ async fn upload_file(
         .extension()
         .map_or(Cow::Borrowed(""), |e| e.to_string_lossy());
 
+    let file_status = is_file_uploaded(&api_key, &file_name, &file_size).await;
+    println!("File status: {:?}", file_status);
+
+    match file_status {
+        FileStatus::AlreadyUploaded => {
+            println!("\rThe file has already been uploaded.");
+                        std::io::stdout().flush().unwrap();
+            return Ok(());
+            // Continue with next file
+        }
+        FileStatus::NotUploaded => {
+            // Do the upload or whatever is needed
+        }
+        FileStatus::Error(e) => {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                        format!("Unexpected state in is_file_uploaded: {}", e),
+            )));
+        }
+    }
+
     // Generate filename and GUID.
-    let file_guid = format!("sdrive-{}", Uuid::new_v4());
+    let cloned_file_name = file_name.clone();
+    let file_hash = compute_sha256_for_filename_and_size(&cloned_file_name, file_size);
+    let file_guid = format!("sdrive-{}", file_hash);
     let chunk_size = 1048576 * 64; // 1000MB
     let mut chunk_count = file_size / chunk_size + 1;
 
@@ -209,7 +320,7 @@ async fn upload_file(
 
         // Read the chunk into the buffer
         file.read_exact(&mut buffer)?;
-        upload_chunk(&buffer, i, &file_name, &file_guid, &pb).await?;
+        upload_chunk(&buffer, i, &file_name, &file_guid, &api_key, &pb).await?;
     }
     pb.finish_with_message("Upload completed\n");
 
@@ -240,6 +351,21 @@ async fn upload_file(
         println!("Upload completed!");
         io::stdout().flush()?;
     }
+
+    let response_hash = client
+        .post("https://sdrive.app/api/v3/set-hash")
+        .json(&json!({
+            "key": api_key,
+            "file_hash": file_hash
+        }))
+        .send()
+        .await?;
+
+    if response.status() == StatusCode::ACCEPTED {
+        println!("Hash set!");
+        io::stdout().flush()?;
+    }
+
     if !config.encrypted {
         println!(
             "\rhttps://download.sdrive.app/public/{}/{}",
