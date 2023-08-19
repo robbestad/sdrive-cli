@@ -1,33 +1,78 @@
 use indicatif::{ProgressBar, ProgressStyle};
+use std::borrow::Cow;
+use std::path::Path;
+use std::fmt;
+use dialoguer::Input;
+use dirs::home_dir;
 use mime_guess::from_path;
 use reqwest::{Client, StatusCode};
-use std::fs;
-use dirs::home_dir;
 use std::env;
-use dialoguer::Input;
+use std::fs;
+use sha2::{Sha256, Digest};
 
 use std::io::{self, Write};
-
 
 use serde::Deserialize;
 use serde_json::json;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use uuid::Uuid;
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use reqwest::multipart::{Form, Part};
 
+const MAX_RETRIES: usize = 5;
+
+#[derive(Debug)]
+enum CustomError {
+    ReqwestError(reqwest::Error),
+    IoError(std::io::Error),
+}
+impl fmt::Display for CustomError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CustomError::ReqwestError(e) => write!(f, "Reqwest Error: {}", e),
+            CustomError::IoError(e) => write!(f, "IO Error: {}", e),
+            // ... handle other variants as needed
+        }
+    }
+}
+
+#[derive(Debug)]
+enum FileStatus {
+    AlreadyUploaded,
+    NotUploaded,
+    Error(CustomError),
+}
 
 #[derive(Debug, Deserialize)]
 struct Config {
-    //owner: String,
     storage_account: String,
     userid: u32,
-    username: String,
     encrypted: bool,
-    //folder_id: u32,
+    username: String,
     api_key: String,
+}
+
+fn compute_sha256(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    format!("{:x}", result)
+}
+fn compute_sha256_for_filename_and_size(file_name: &str, file_size: usize) -> String {
+    let mut data = file_name.as_bytes().to_vec();
+    let size_bytes = file_size.to_le_bytes(); // Convert the usize to its little-endian byte representation
+    data.extend(&size_bytes);
+    compute_sha256(&data)
+}
+
+fn compute_hash<T: Hash>(t: &T) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    t.hash(&mut hasher);
+    hasher.finish()
 }
 
 async fn complete_upload(file_name: &str, chunk_count: usize) -> Result<(), reqwest::Error> {
@@ -55,6 +100,7 @@ async fn upload_chunk(
     i: usize,
     file_name: &str,
     file_guid: &str,
+    api_key: &str,
     pb: &ProgressBar,
 ) -> Result<(), reqwest::Error> {
     let client = Client::new();
@@ -72,6 +118,7 @@ async fn upload_chunk(
             ("id", i.to_string()),
             ("fileName", file_name.to_string()),
             ("identifier", file_guid.to_string()),
+            ("apikey", api_key.to_string()),
         ])
         .multipart(form)
         .send()
@@ -82,25 +129,92 @@ async fn upload_chunk(
     Ok(())
 }
 
+async fn is_file_uploaded(api_key: &str, file_name: &str, file_size: &usize) -> FileStatus {
+    let file_hash = compute_sha256_for_filename_and_size(&file_name, *file_size);
+    println!("hash {}", &file_hash);
+
+    let url = format!(
+        "https://sdrive.app/api/v3/file-exists?key={}&file_hash={}",
+        api_key, file_hash
+    );
+
+    for attempt in 1..=MAX_RETRIES {
+        let response = reqwest::get(&url).await;
+
+        match response {
+            Ok(res) => match res.status() {
+                reqwest::StatusCode::OK => return FileStatus::AlreadyUploaded,
+                reqwest::StatusCode::NOT_FOUND => return FileStatus::NotUploaded,
+                _ => {
+                    eprintln!(
+                        "Attempt {}: Received unexpected status: {}. Response: {:?}",
+                        attempt,
+                        res.status(),
+                        res.text().await.unwrap_or_default()
+                    );
+                }
+            },
+            Err(e) => {
+                eprintln!("Attempt {}: Error: {}", attempt, e);
+                return FileStatus::Error(CustomError::ReqwestError(e));
+            }
+        }
+
+        // If not the last attempt, sleep before retrying.
+        if attempt < MAX_RETRIES {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+    }
+    eprintln!("Unexpected state reached in is_file_uploaded");
+    FileStatus::Error(CustomError::IoError(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "Unexpected state in is_file_uploaded",
+    )))
+}
+
 async fn is_valid_api_key(api_key: &str, username: &str) -> Result<bool, reqwest::Error> {
     let url = format!(
         "https://sdrive.app/api/v1/apikey/verify?key={}&username={}",
         api_key, username
     );
-    let response = reqwest::get(&url).await?;
-    let status = response.status();
 
-    if status == reqwest::StatusCode::OK {
-        Ok(true)
-    } else {
-        Ok(false)
+    for attempt in 1..=MAX_RETRIES {
+        let response = reqwest::get(&url).await;
+
+        match response {
+            Ok(res) => {
+                if res.status() == reqwest::StatusCode::OK {
+                    return Ok(true);
+                } else {
+                    eprintln!(
+                        "Attempt {}: Received unexpected status: {}. Response: {:?}",
+                        attempt,
+                        res.status(),
+                        res.text().await.unwrap_or_default()
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("Attempt {}: Error: {}", attempt, e);
+            }
+        }
+
+        // If not the last attempt, sleep before retrying.
+        if attempt < MAX_RETRIES {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
     }
+
+    Ok(false)
 }
 
+async fn upload_file(
+    file_path: PathBuf,
+    parent_folder: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    //println!("File path: {}", &file_path.display());
+    //println!("Parent folder: {}", &parent_folder.display());
 
-
-
-async fn upload_file(file_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let mut config_path: PathBuf = match home_dir() {
         Some(path) => path,
         None => panic!("Failed to find the user's home directory."),
@@ -110,13 +224,22 @@ async fn upload_file(file_path: PathBuf) -> Result<(), Box<dyn std::error::Error
         None => panic!("Failed to get the file name."),
     };
 
-
-    println!("sdriveupload v{}. Uploading {}", env!("CARGO_PKG_VERSION"), &file_name);
+    println!(
+        "sdriveupload v{}. Uploading {}",
+        env!("CARGO_PKG_VERSION"),
+        &file_name
+    );
 
     config_path.push(".config");
     config_path.push("sdrive.toml");
-    let config_str = fs::read_to_string(config_path).expect("Failed to read the configuration file.");
+    let config_str =
+        fs::read_to_string(config_path).expect("Failed to read the configuration file.");
     let config: Config = toml::from_str(&config_str)?;
+
+    let mut folder = parent_folder.display().to_string();
+    if !folder.starts_with("/") {
+        folder.insert(0, '/');
+    }
 
     let api_key = config.api_key;
     let username = config.username;
@@ -130,21 +253,41 @@ async fn upload_file(file_path: PathBuf) -> Result<(), Box<dyn std::error::Error
         )));
     }
 
-
     // Get file size.
     let file_size = file_path.metadata()?.len() as usize;
 
     // Get MIME type and extension.
     let mime_type = from_path(&file_path).first_or_octet_stream();
     let mime = mime_type.essence_str().to_string();
-    let ext = file_path
+    let ext: Cow<str> = file_path
         .extension()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
+        .map_or(Cow::Borrowed(""), |e| e.to_string_lossy());
+
+    let file_status = is_file_uploaded(&api_key, &file_name, &file_size).await;
+    println!("File status: {:?}", file_status);
+
+    match file_status {
+        FileStatus::AlreadyUploaded => {
+            println!("\rThe file has already been uploaded.");
+                        std::io::stdout().flush().unwrap();
+            return Ok(());
+            // Continue with next file
+        }
+        FileStatus::NotUploaded => {
+            // Do the upload or whatever is needed
+        }
+        FileStatus::Error(e) => {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                        format!("Unexpected state in is_file_uploaded: {}", e),
+            )));
+        }
+    }
 
     // Generate filename and GUID.
-    let file_guid = format!("sdrive-{}", Uuid::new_v4());
+    let cloned_file_name = file_name.clone();
+    let file_hash = compute_sha256_for_filename_and_size(&cloned_file_name, file_size);
+    let file_guid = format!("sdrive-{}", file_hash);
     let chunk_size = 1048576 * 64; // 1000MB
     let mut chunk_count = file_size / chunk_size + 1;
 
@@ -177,9 +320,9 @@ async fn upload_file(file_path: PathBuf) -> Result<(), Box<dyn std::error::Error
 
         // Read the chunk into the buffer
         file.read_exact(&mut buffer)?;
-        upload_chunk(&buffer, i, &file_name, &file_guid, &pb).await?;
+        upload_chunk(&buffer, i, &file_name, &file_guid, &api_key, &pb).await?;
     }
-    pb.finish_with_message("Upload completed");
+    pb.finish_with_message("Upload completed\n");
 
     complete_upload(&file_guid, chunk_count).await?;
 
@@ -197,19 +340,56 @@ async fn upload_file(file_path: PathBuf) -> Result<(), Box<dyn std::error::Error
             "encrypted": config.encrypted,
             "username": username,
             "mime": mime,
-            "ext": ext,
-            "folder_id": 0,
+            "ext": &*ext,
+            "folder": folder,
             "mode": "ctr"
         }))
         .send()
         .await?;
 
-  if response.status() == StatusCode::ACCEPTED {
-        print!("\rUpload completed!");
+    if response.status() == StatusCode::ACCEPTED {
+        println!("Upload completed!");
         io::stdout().flush()?;
     }
+
+    let response_hash = client
+        .post("https://sdrive.app/api/v3/set-hash")
+        .json(&json!({
+            "key": api_key,
+            "file_hash": file_hash
+        }))
+        .send()
+        .await?;
+
+    if response.status() == StatusCode::ACCEPTED {
+        println!("Hash set!");
+        io::stdout().flush()?;
+    }
+
     if !config.encrypted {
-        println!("\rhttps://download.sdrive.app/public/{}/{}",config.storage_account,file_guid);
+        println!(
+            "\rhttps://download.sdrive.app/public/{}/{}",
+            config.storage_account, file_guid
+        );
+    }
+    Ok(())
+}
+
+#[async_recursion::async_recursion]
+async fn handle_directory(dir_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in std::fs::read_dir(dir_path)? {
+        let entry_path = entry?.path();
+        if entry_path.is_file() {
+            let parent_folder = entry_path.parent().unwrap_or(&entry_path);
+            println!(
+                "Parent folder of {}: {}",
+                &entry_path.display(),
+                parent_folder.display()
+            );
+            upload_file(entry_path.clone(), parent_folder.to_path_buf()).await?;
+        } else if entry_path.is_dir() {
+            handle_directory(&entry_path).await?; // Recursive call
+        }
     }
     Ok(())
 }
@@ -227,20 +407,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args[1].clone().into()
     };
 
-    // Check if the path is a file or a directory
     if path.is_file() {
-        upload_file(path).await?;
+        let parent_folder = path.parent().unwrap_or(&path).to_path_buf();
+        println!("Parent folder: {}", &parent_folder.display());
+        upload_file(path.clone(), parent_folder).await?;
     } else if path.is_dir() {
-        for entry in std::fs::read_dir(path)? {
-            let entry_path = entry?.path();
-            if entry_path.is_file() {
-                upload_file(entry_path).await?;
-            }
-        }
+        handle_directory(&path).await?;
     } else {
         eprintln!("The specified path is neither a file nor a directory.");
     }
 
     Ok(())
 }
-
