@@ -1,14 +1,14 @@
-use indicatif::{ProgressBar, ProgressStyle};
-use std::borrow::Cow;
-use std::path::Path;
-use std::fmt;
 use dialoguer::Input;
 use dirs::home_dir;
+use indicatif::{ProgressBar, ProgressStyle};
 use mime_guess::from_path;
 use reqwest::{Client, StatusCode};
+use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::env;
+use std::fmt;
 use std::fs;
-use sha2::{Sha256, Digest};
+use std::path::Path;
 
 use std::io::{self, Write};
 
@@ -17,9 +17,6 @@ use serde_json::json;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 use reqwest::multipart::{Form, Part};
 
@@ -67,12 +64,6 @@ fn compute_sha256_for_filename_and_size(file_name: &str, file_size: usize) -> St
     let size_bytes = file_size.to_le_bytes(); // Convert the usize to its little-endian byte representation
     data.extend(&size_bytes);
     compute_sha256(&data)
-}
-
-fn compute_hash<T: Hash>(t: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    t.hash(&mut hasher);
-    hasher.finish()
 }
 
 async fn complete_upload(file_name: &str, chunk_count: usize) -> Result<(), reqwest::Error> {
@@ -131,7 +122,7 @@ async fn upload_chunk(
 
 async fn is_file_uploaded(api_key: &str, file_name: &str, file_size: &usize) -> FileStatus {
     let file_hash = compute_sha256_for_filename_and_size(&file_name, *file_size);
-    println!("hash {}", &file_hash);
+    //println!("hash {}", &file_hash);
 
     let url = format!(
         "https://sdrive.app/api/v3/file-exists?key={}&file_hash={}",
@@ -264,12 +255,12 @@ async fn upload_file(
         .map_or(Cow::Borrowed(""), |e| e.to_string_lossy());
 
     let file_status = is_file_uploaded(&api_key, &file_name, &file_size).await;
-    println!("File status: {:?}", file_status);
+    //println!("File status: {:?}", file_status);
 
     match file_status {
         FileStatus::AlreadyUploaded => {
             println!("\rThe file has already been uploaded.");
-                        std::io::stdout().flush().unwrap();
+            std::io::stdout().flush().unwrap();
             return Ok(());
             // Continue with next file
         }
@@ -279,7 +270,7 @@ async fn upload_file(
         FileStatus::Error(e) => {
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                        format!("Unexpected state in is_file_uploaded: {}", e),
+                format!("Unexpected state in is_file_uploaded: {}", e),
             )));
         }
     }
@@ -352,7 +343,7 @@ async fn upload_file(
         io::stdout().flush()?;
     }
 
-    let response_hash = client
+    let _response_hash = client
         .post("https://sdrive.app/api/v3/set-hash")
         .json(&json!({
             "key": api_key,
@@ -362,7 +353,7 @@ async fn upload_file(
         .await?;
 
     if response.status() == StatusCode::ACCEPTED {
-        println!("Hash set!");
+        //println!("Hash set!");
         io::stdout().flush()?;
     }
 
@@ -381,11 +372,11 @@ async fn handle_directory(dir_path: &Path) -> Result<(), Box<dyn std::error::Err
         let entry_path = entry?.path();
         if entry_path.is_file() {
             let parent_folder = entry_path.parent().unwrap_or(&entry_path);
-            println!(
+            /*println!(
                 "Parent folder of {}: {}",
                 &entry_path.display(),
                 parent_folder.display()
-            );
+            );*/
             upload_file(entry_path.clone(), parent_folder.to_path_buf()).await?;
         } else if entry_path.is_dir() {
             handle_directory(&entry_path).await?; // Recursive call
