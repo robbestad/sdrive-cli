@@ -59,8 +59,10 @@ fn compute_sha256(data: &[u8]) -> String {
     let result = hasher.finalize();
     format!("{:x}", result)
 }
-fn compute_sha256_for_filename_and_size(file_name: &str, file_size: usize) -> String {
-    let mut data = file_name.as_bytes().to_vec();
+fn compute_sha256_for_filename_and_size(file_path: &str, file_name: &str, file_size: usize) -> String {
+    let mut data = file_path.as_bytes().to_vec();
+    let size_name = file_name.as_bytes().to_vec();
+    data.extend(&size_name);
     let size_bytes = file_size.to_le_bytes(); // Convert the usize to its little-endian byte representation
     data.extend(&size_bytes);
     compute_sha256(&data)
@@ -120,9 +122,9 @@ async fn upload_chunk(
     Ok(())
 }
 
-async fn is_file_uploaded(api_key: &str, file_name: &str, file_size: &usize) -> FileStatus {
-    let file_hash = compute_sha256_for_filename_and_size(&file_name, *file_size);
-    //println!("hash {}", &file_hash);
+async fn is_file_uploaded(api_key: &str, file_path: &str, file_name: &str, file_size: &usize) -> FileStatus {
+    let file_hash = compute_sha256_for_filename_and_size(&file_path, &file_name, *file_size);
+    println!("hash {}", &file_hash);
 
     let url = format!(
         "https://sdrive.app/api/v3/file-exists?key={}&file_hash={}",
@@ -246,6 +248,9 @@ async fn upload_file(
 
     // Get file size.
     let file_size = file_path.metadata()?.len() as usize;
+    let file_path_string = file_path.to_str().expect("Path is not valid UTF8").to_string();
+
+
 
     // Get MIME type and extension.
     let mime_type = from_path(&file_path).first_or_octet_stream();
@@ -254,7 +259,7 @@ async fn upload_file(
         .extension()
         .map_or(Cow::Borrowed(""), |e| e.to_string_lossy());
 
-    let file_status = is_file_uploaded(&api_key, &file_name, &file_size).await;
+    let file_status = is_file_uploaded(&api_key, &file_path_string, &file_name, &file_size).await;
     //println!("File status: {:?}", file_status);
 
     match file_status {
@@ -277,7 +282,8 @@ async fn upload_file(
 
     // Generate filename and GUID.
     let cloned_file_name = file_name.clone();
-    let file_hash = compute_sha256_for_filename_and_size(&cloned_file_name, file_size);
+    let cloned_file_path = file_path_string.clone();
+    let file_hash = compute_sha256_for_filename_and_size(&cloned_file_path, &cloned_file_name, file_size);
     let file_guid = format!("sdrive-{}", file_hash);
     let chunk_size = 1048576 * 64; // 1000MB
     let mut chunk_count = file_size / chunk_size + 1;
