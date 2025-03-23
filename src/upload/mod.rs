@@ -171,7 +171,7 @@ async fn is_valid_api_key(api_key: &str) -> Result<bool, reqwest::Error> {
         "https://api.sdrive.app/api/v1/apikey/verify?key={}",
         api_key
     );
-    println!("{}", url);
+    tracing::debug!("Verifying API key: {}", url);
     for attempt in 1..=MAX_RETRIES {
         let response = reqwest::get(&url).await;
         match response {
@@ -223,7 +223,7 @@ pub async fn upload_file(
         Some(name) => name.to_string_lossy().to_string(),
         None => panic!("Failed to get the file name."),
     };
-    println!("Uploading {}", &file_name);
+    println!("🚀 Uploading {}", &file_name);
     let mut folder = parent_folder.display().to_string();
     if !folder.starts_with("/") {
         folder.insert(0, '/');
@@ -235,32 +235,29 @@ pub async fn upload_file(
         println!("\rThe API key is invalid.");
         return Err(anyhow::anyhow!("Invalid API key"));
     }
-
     let (encrypted_content, per_file_key) = encrypt_file(&file_path)?;
+    //fs::write("test_encrypted.enc", &encrypted_content)?; // Debugging
+    //tracing::debug!("Saved encrypted file to test_encrypted.enc for debugging, size: {} bytes", encrypted_content.len());
     let encrypted_file_size = encrypted_content.len();
-    if encrypted_content.len() < 56 {
-        return Err(anyhow::anyhow!("Encrypted data too short to contain key and nonce"));
+    if encrypted_file_size < 56 {
+        return Err(anyhow::anyhow!("Encrypted data too short to contain key and nonce: {} bytes", encrypted_file_size));
     }
     let (_encrypted_key, rest) = encrypted_content.split_at(32);
     let (_key_nonce, rest) = rest.split_at(12);
-    let (nonce, ciphertext) = rest.split_at(12);
+    let (nonce, _ciphertext) = rest.split_at(12);
     let nonce_b64 = STANDARD.encode(nonce);
-    println!("Per-file key (base64): {}", STANDARD.encode(per_file_key));
-    println!("Nonce (base64): {}", nonce_b64);
+    //tracing::info!("🔑 To share this file securely, use this file key: {}", STANDARD.encode(per_file_key));
+    println!("🔑 To share this file securely, use this file key");
+    println!("🔑 {}", STANDARD.encode(per_file_key));
+    tracing::debug!("Nonce (base64): {}", nonce_b64);
 
-    // Resten av opplastingslogikken forblir stort sett uendret
     let mime_type = from_path(&file_path).first_or_octet_stream();
     let mime = mime_type.essence_str().to_string();
-    let ext: Cow<str> = file_path
-        .extension()
-        .map_or(Cow::Borrowed(""), |e| e.to_string_lossy());
+    let ext: Cow<str> = file_path.extension().map_or(Cow::Borrowed(""), |e| e.to_string_lossy());
     let file_status = is_file_uploaded(&api_key, &file_name, &encrypted_file_size).await;
     match file_status {
         FileStatus::AlreadyUploaded => {
-            println!(
-                "\rYou have recently uploaded this file. Likely url: https://cdn.sdrive.pro/{}/{}",
-                &user_guid, &file_name
-            );
+            println!("\rYou have recently uploaded this file. Likely url: https://cdn.sdrive.pro/{}/{}", &user_guid, &file_name);
             io::stdout().flush()?;
             return Ok(());
         }
@@ -314,7 +311,7 @@ pub async fn upload_file(
                     "folder": "/",
                     "user_guid": user_guid,
                     "mode": "ctr",
-                    "storageNetwork": "arweave",
+                    "storageNetwork": "ipfs",
                     "apikey": api_key,
                 }))
                 .send()
@@ -322,7 +319,7 @@ pub async fn upload_file(
             if response.status() == StatusCode::ACCEPTED {
                 io::stdout().flush()?;
             } else {
-                println!("Upload failed… You might be out of credits.");
+                println!("Upload failed…");
                 io::stdout().flush()?;
                 return Ok(());
             }
@@ -347,20 +344,24 @@ pub async fn upload_file(
                 .send()
                 .await?;
             if response.status() == StatusCode::ACCEPTED {
-                println!("Upload success. Finalizing URL...");
+                println!("✅ Upload success. Finalizing URL...");
                 io::stdout().flush()?;
             }
             match poll_file_status(&client, &file_guid).await {
-                Ok(url) => println!("Successfully retrieved URL: {}", url),
+                Ok(url) => println!("🔗 Your file is available at: {}", url),
                 Err(e) => println!("Error: {}", e),
             }
         }
         FileStatus::Error(e) => {
-            return Err(anyhow::anyhow!("Unexpected state in is_file_uploaded: {}", e));
+            return Err(anyhow::anyhow!(
+                "Unexpected state in is_file_uploaded: {}",
+                e
+            ));
         }
     }
     Ok(())
 }
+
 
 #[async_recursion::async_recursion]
 pub async fn handle_directory(dir_path: &Path, config_path: &String) -> Result<()> {

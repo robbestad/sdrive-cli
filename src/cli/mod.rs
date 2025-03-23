@@ -4,7 +4,6 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[clap(author, version, about)]
 pub struct Cli {
-    /// Log level: trace, debug, info, warn, error, off
     #[clap(short, long, global = true)]
     pub log_level: Option<String>,
     #[clap(subcommand)]
@@ -19,8 +18,9 @@ pub enum Commands {
     },
     Upload(UploadArgs),
     Sync(SyncArgs),
+    DownloadWithKey(DownloadWithKeyArgs),
+    Download(DownloadArgs),
     Decrypt(DecryptArgs),
-    DecryptWithKey(DecryptWithKeyArgs), // Ny kommando fra tidligere
 }
 
 #[derive(Subcommand)]
@@ -43,11 +43,8 @@ pub enum ConfigSubcommands {
         #[clap(short, long)]
         config_path: Option<String>,
     },
-    /// Export the master encryption key from keyring
     ExportKey,
-    /// Import a master encryption key into keyring
     ImportKey {
-        /// Base64-encoded master key to import
         key: String,
     },
 }
@@ -67,30 +64,29 @@ pub struct SyncArgs {
 }
 
 #[derive(Args)]
-pub struct DecryptArgs {
-    #[clap(subcommand)]
-    pub source: DecryptSource,
+pub struct DownloadArgs {
+    pub url: String,  
+
     #[clap(short, long)]
     pub output: Option<PathBuf>,
-}
-
-#[derive(Subcommand)]
-pub enum DecryptSource {
-    File {
-        #[clap(parse(from_os_str))]
-        path: PathBuf,
-    },
-    Url {
-        url: String,
-    },
 }
 
 #[derive(Args)]
-pub struct DecryptWithKeyArgs {
+pub struct DecryptArgs {
     #[clap(parse(from_os_str))]
     pub file: PathBuf,
+
     #[clap(short, long)]
     pub output: Option<PathBuf>,
-    /// Base64-encoded per-file key
+}
+
+#[derive(Args)]
+pub struct DownloadWithKeyArgs {
+    pub url: String,
+
+    #[clap(short = 'k', long = "key")]
     pub key: String,
+
+    #[clap(short, long)]
+    pub output: Option<PathBuf>,
 }
