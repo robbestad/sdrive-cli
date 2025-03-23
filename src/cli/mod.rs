@@ -64,13 +64,13 @@ pub struct SyncArgs {
 
 #[derive(Args)]
 pub struct DownloadArgs {
-    pub url: String,  
+    pub url: String,
 
     #[clap(short, long)]
     pub output: Option<PathBuf>,
 
     #[clap(short = 'k', long = "key")]
-    pub key: Option<String>,  // ← Valgfri nøkkel
+    pub key: Option<String>, // ← Valgfri nøkkel
 }
 #[derive(Args)]
 pub struct DecryptArgs {
@@ -80,4 +80,3 @@ pub struct DecryptArgs {
     #[clap(short, long)]
     pub output: Option<PathBuf>,
 }
-

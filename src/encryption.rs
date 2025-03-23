@@ -1,16 +1,16 @@
 use aes_gcm::aead::{Aead, KeyInit};
-use std::fs;
-use std::path::Path;
 use aes_gcm::{Aes256Gcm, Nonce};
-use keyring::Entry;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
-use rand::RngCore;
-use rand::rng;
 use anyhow::Result;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use hex;
+use keyring::Entry;
+use rand::rng;
+use rand::RngCore;
 use serde::de::DeserializeOwned;
 use serde_json;
-use hex;
+use std::fs;
+use std::path::Path;
 
 pub fn generate_key() -> [u8; 32] {
     let mut key = [0u8; 32];
@@ -70,20 +70,22 @@ pub fn encrypt_file(file_path: &Path) -> Result<(Vec<u8>, [u8; 32])> {
     let plaintext = fs::read(file_path)?;
     tracing::debug!("⚙️ Plaintext size: {} bytes", plaintext.len());
     let master_key = retrieve_key()?;
-    
+
     let per_file_key = generate_key();
     let (ciphertext, nonce) = encrypt_data(&per_file_key, &plaintext)
         .map_err(|e| anyhow::anyhow!("Encryption failed: {:?}", e))?;
     tracing::debug!("⚙️ Ciphertext size: {} bytes", ciphertext.len());
-    
+
     let cipher = Aes256Gcm::new_from_slice(&master_key).expect("Valid key size");
     let mut key_nonce = [0u8; 12];
     rng().fill_bytes(&mut key_nonce);
     let key_nonce_obj = Nonce::from_slice(&key_nonce);
-    let encrypted_key = cipher.encrypt(key_nonce_obj, per_file_key.as_ref())
+    let encrypted_key = cipher
+        .encrypt(key_nonce_obj, per_file_key.as_ref())
         .map_err(|e| anyhow::anyhow!("Failed to encrypt per-file key: {:?}", e))?;
-    
-    let mut encrypted_content = Vec::with_capacity(encrypted_key.len() + 12 + 12 + ciphertext.len());
+
+    let mut encrypted_content =
+        Vec::with_capacity(encrypted_key.len() + 12 + 12 + ciphertext.len());
     encrypted_content.extend_from_slice(&encrypted_key);
     encrypted_content.extend_from_slice(&key_nonce);
     encrypted_content.extend_from_slice(&nonce);
@@ -91,13 +93,20 @@ pub fn encrypt_file(file_path: &Path) -> Result<(Vec<u8>, [u8; 32])> {
     tracing::trace!("⚙️ Encrypted content size: {}", encrypted_content.len());
 
     if encrypted_content.len() != (encrypted_key.len() + 12 + 12 + ciphertext.len()) {
-        return Err(anyhow::anyhow!("Encrypted content size mismatch: expected {}, got {}", 
-            encrypted_key.len() + 12 + 12 + ciphertext.len(), encrypted_content.len()));
+        return Err(anyhow::anyhow!(
+            "Encrypted content size mismatch: expected {}, got {}",
+            encrypted_key.len() + 12 + 12 + ciphertext.len(),
+            encrypted_content.len()
+        ));
     }
-    
+
     Ok((encrypted_content, per_file_key))
 }
-pub fn decrypt_data(key: &[u8; 32], ciphertext: &[u8], nonce: &[u8; 12]) -> Result<Vec<u8>, aes_gcm::Error> {
+pub fn decrypt_data(
+    key: &[u8; 32],
+    ciphertext: &[u8],
+    nonce: &[u8; 12],
+) -> Result<Vec<u8>, aes_gcm::Error> {
     let cipher = Aes256Gcm::new_from_slice(key).expect("Valid key size");
     let nonce_obj = Nonce::from_slice(nonce);
     let plaintext = cipher.decrypt(nonce_obj, ciphertext)?;
@@ -115,48 +124,54 @@ pub fn decrypt_file<T: DeserializeOwned + 'static>(
 ) -> Result<DecryptedData<T>> {
     let encrypted_data = fs::read(encrypted_file_path)?;
     tracing::trace!("Encrypted data size: {} bytes", encrypted_data.len());
-    
+
     if encrypted_data.len() < 72 {
-        return Err(anyhow::anyhow!("Encrypted file too short to contain key and nonce"));
+        return Err(anyhow::anyhow!(
+            "Encrypted file too short to contain key and nonce"
+        ));
     }
-    
+
     let (encrypted_key, rest) = encrypted_data.split_at(48);
     tracing::trace!("Encrypted key (hex): {}", hex::encode(encrypted_key));
-    
+
     let (key_nonce_bytes, rest) = rest.split_at(12);
     tracing::trace!("Key nonce (hex): {}", hex::encode(key_nonce_bytes));
     let (nonce_bytes, ciphertext) = rest.split_at(12);
     tracing::trace!("Nonce (hex): {}", hex::encode(nonce_bytes));
     tracing::trace!("Ciphertext (hex): {}", hex::encode(ciphertext));
-    
+
     let mut key_nonce = [0u8; 12];
     key_nonce.copy_from_slice(key_nonce_bytes);
     tracing::trace!("Key nonce (hex): {}", hex::encode(key_nonce));
     let mut nonce = [0u8; 12];
     nonce.copy_from_slice(nonce_bytes);
     tracing::trace!("Nonce (hex): {}", hex::encode(nonce));
-    
+
     let master_key = retrieve_key()?;
     let cipher = Aes256Gcm::new_from_slice(&master_key).expect("Valid key size");
     tracing::trace!("Master key (hex): {}", hex::encode(&master_key));
-    let per_file_key = cipher.decrypt(Nonce::from_slice(&key_nonce), encrypted_key)
+    let per_file_key = cipher
+        .decrypt(Nonce::from_slice(&key_nonce), encrypted_key)
         .map_err(|e| anyhow::anyhow!("Failed to decrypt per-file key: {:?}", e))?;
-    tracing::trace!("Decrypted per-file key (hex): {}", hex::encode(&per_file_key));
+    tracing::trace!(
+        "Decrypted per-file key (hex): {}",
+        hex::encode(&per_file_key)
+    );
 
     if per_file_key.len() != 32 {
         return Err(anyhow::anyhow!("Decrypted per-file key has invalid length"));
     }
     let mut key = [0u8; 32];
     key.copy_from_slice(&per_file_key);
-    
+
     let plaintext = decrypt_data(&key, ciphertext, &nonce)
         .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
-    
+
     if let Some(path) = output_file_path {
         fs::write(path, &plaintext)?;
         //println!("File decrypted and saved to: {}", path.display());
     }
-    
+
     if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Vec<u8>>() {
         Ok(DecryptedData::Raw(plaintext))
     } else {
@@ -166,30 +181,31 @@ pub fn decrypt_file<T: DeserializeOwned + 'static>(
     }
 }
 
-
 pub fn export_per_file_key(encrypted_file_path: &Path) -> Result<String> {
     let encrypted_data = fs::read(encrypted_file_path)?;
-    
+
     if encrypted_data.len() < 72 {
-        return Err(anyhow::anyhow!("Encrypted file too short to contain key and nonce"));
+        return Err(anyhow::anyhow!(
+            "Encrypted file too short to contain key and nonce"
+        ));
     }
-    
+
     // Oppdatert her: bruk 48 bytes for encrypted_key
     let (encrypted_key, rest) = encrypted_data.split_at(48);
     let (key_nonce_bytes, _) = rest.split_at(12);
-    
+
     let mut key_nonce = [0u8; 12];
     key_nonce.copy_from_slice(key_nonce_bytes);
-    
+
     let master_key = retrieve_key()?;
     let cipher = Aes256Gcm::new_from_slice(&master_key).expect("Valid key size");
-    
-    let per_file_key = cipher.decrypt(Nonce::from_slice(&key_nonce), encrypted_key)
+
+    let per_file_key = cipher
+        .decrypt(Nonce::from_slice(&key_nonce), encrypted_key)
         .map_err(|e| anyhow::anyhow!("Failed to decrypt per-file key: {:?}", e))?;
-    
+
     Ok(STANDARD.encode(per_file_key))
 }
-
 
 pub fn decrypt_file_with_key<T: DeserializeOwned + 'static>(
     encrypted_file_path: &Path,
@@ -197,33 +213,36 @@ pub fn decrypt_file_with_key<T: DeserializeOwned + 'static>(
     per_file_key_b64: &str,
 ) -> Result<DecryptedData<T>> {
     let encrypted_data = fs::read(encrypted_file_path)?;
-    
-    if encrypted_data.len() < 72 { // 48 (encrypted_key) + 12 (key_nonce) + 12 (nonce)
-        return Err(anyhow::anyhow!("Encrypted file too short to contain key and nonce"));
+
+    if encrypted_data.len() < 72 {
+        // 48 (encrypted_key) + 12 (key_nonce) + 12 (nonce)
+        return Err(anyhow::anyhow!(
+            "Encrypted file too short to contain key and nonce"
+        ));
     }
-    
+
     // Hopp over encrypted_key (48) + key_nonce (12) = 60 bytes
     let rest = &encrypted_data[60..];
     let (nonce_bytes, ciphertext) = rest.split_at(12);
-    
+
     let mut nonce = [0u8; 12];
     nonce.copy_from_slice(nonce_bytes);
-    
+
     let per_file_key = STANDARD.decode(per_file_key_b64)?;
     if per_file_key.len() != 32 {
         return Err(anyhow::anyhow!("Invalid per-file key length"));
     }
     let mut key = [0u8; 32];
     key.copy_from_slice(&per_file_key);
-    
+
     let plaintext = decrypt_data(&key, ciphertext, &nonce)
         .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
-    
+
     if let Some(path) = output_file_path {
         fs::write(path, &plaintext)?;
         //println!("File decrypted and saved to: {}", path.display());
     }
-    
+
     if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Vec<u8>>() {
         Ok(DecryptedData::Raw(plaintext))
     } else {

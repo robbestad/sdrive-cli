@@ -55,7 +55,11 @@ pub async fn poll_file_status(client: &Client, file_guid: &str) -> Result<String
                     sleep(Duration::from_secs(wait_seconds as u64)).await;
                 }
                 Err(e) => {
-                    tracing::info!("❌ Failed to deserialize response: {}. Body: {}", e, body_text);
+                    tracing::info!(
+                        "❌ Failed to deserialize response: {}. Body: {}",
+                        e,
+                        body_text
+                    );
                     return Err(anyhow::anyhow!("❌ Deserialization failed: {}", e));
                 }
             }

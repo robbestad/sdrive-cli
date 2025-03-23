@@ -240,7 +240,10 @@ pub async fn upload_file(
     //tracing::debug!("Saved encrypted file to test_encrypted.enc for debugging, size: {} bytes", encrypted_content.len());
     let encrypted_file_size = encrypted_content.len();
     if encrypted_file_size < 56 {
-        return Err(anyhow::anyhow!("Encrypted data too short to contain key and nonce: {} bytes", encrypted_file_size));
+        return Err(anyhow::anyhow!(
+            "Encrypted data too short to contain key and nonce: {} bytes",
+            encrypted_file_size
+        ));
     }
     let (_encrypted_key, rest) = encrypted_content.split_at(32);
     let (_key_nonce, rest) = rest.split_at(12);
@@ -253,11 +256,16 @@ pub async fn upload_file(
 
     let mime_type = from_path(&file_path).first_or_octet_stream();
     let mime = mime_type.essence_str().to_string();
-    let ext: Cow<str> = file_path.extension().map_or(Cow::Borrowed(""), |e| e.to_string_lossy());
+    let ext: Cow<str> = file_path
+        .extension()
+        .map_or(Cow::Borrowed(""), |e| e.to_string_lossy());
     let file_status = is_file_uploaded(&api_key, &file_name, &encrypted_file_size).await;
     match file_status {
         FileStatus::AlreadyUploaded => {
-            println!("\rYou have recently uploaded this file. Likely url: https://cdn.sdrive.pro/{}/{}", &user_guid, &file_name);
+            println!(
+                "\rYou have recently uploaded this file. Likely url: https://cdn.sdrive.pro/{}/{}",
+                &user_guid, &file_name
+            );
             io::stdout().flush()?;
             return Ok(());
         }
@@ -361,7 +369,6 @@ pub async fn upload_file(
     }
     Ok(())
 }
-
 
 #[async_recursion::async_recursion]
 pub async fn handle_directory(dir_path: &Path, config_path: &String) -> Result<()> {
