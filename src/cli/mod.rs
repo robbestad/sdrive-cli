@@ -18,7 +18,6 @@ pub enum Commands {
     },
     Upload(UploadArgs),
     Sync(SyncArgs),
-    DownloadWithKey(DownloadWithKeyArgs),
     Download(DownloadArgs),
     Decrypt(DecryptArgs),
 }
@@ -69,8 +68,10 @@ pub struct DownloadArgs {
 
     #[clap(short, long)]
     pub output: Option<PathBuf>,
-}
 
+    #[clap(short = 'k', long = "key")]
+    pub key: Option<String>,  // ← Valgfri nøkkel
+}
 #[derive(Args)]
 pub struct DecryptArgs {
     #[clap(parse(from_os_str))]
@@ -80,13 +81,3 @@ pub struct DecryptArgs {
     pub output: Option<PathBuf>,
 }
 
-#[derive(Args)]
-pub struct DownloadWithKeyArgs {
-    pub url: String,
-
-    #[clap(short = 'k', long = "key")]
-    pub key: String,
-
-    #[clap(short, long)]
-    pub output: Option<PathBuf>,
-}
