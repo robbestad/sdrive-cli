@@ -1,4 +1,5 @@
 use anyhow::Result;
+use base64::engine::general_purpose::STANDARD;
 use indicatif::{ProgressBar, ProgressStyle};
 use mime_guess::from_path;
 use reqwest::{Client, StatusCode};
@@ -217,7 +218,6 @@ pub async fn upload_file(
     parent_folder: PathBuf,
     config_path: String,
 ) -> Result<()> {
-    // Endret til anyhow::Result
     let config = read_config(Some(config_path)).await?;
     let file_name = match file_path.file_name() {
         Some(name) => name.to_string_lossy().to_string(),
@@ -236,15 +236,19 @@ pub async fn upload_file(
         return Err(anyhow::anyhow!("Invalid API key"));
     }
 
-    let encrypted_content = encrypt_file(&file_path)?;
+    let (encrypted_content, per_file_key) = encrypt_file(&file_path)?;
     let encrypted_file_size = encrypted_content.len();
-    if encrypted_content.len() < 12 {
-        return Err(anyhow::anyhow!("Encrypted data too short to contain nonce"));
+    if encrypted_content.len() < 56 {
+        return Err(anyhow::anyhow!("Encrypted data too short to contain key and nonce"));
     }
-    let (nonce, _ciphertext) = encrypted_content.split_at(12);
-    let nonce_b64 = base64::engine::general_purpose::STANDARD.encode(nonce);
+    let (_encrypted_key, rest) = encrypted_content.split_at(32);
+    let (_key_nonce, rest) = rest.split_at(12);
+    let (nonce, ciphertext) = rest.split_at(12);
+    let nonce_b64 = STANDARD.encode(nonce);
+    println!("Per-file key (base64): {}", STANDARD.encode(per_file_key));
     println!("Nonce (base64): {}", nonce_b64);
 
+    // Resten av opplastingslogikken forblir stort sett uendret
     let mime_type = from_path(&file_path).first_or_octet_stream();
     let mime = mime_type.essence_str().to_string();
     let ext: Cow<str> = file_path
@@ -352,10 +356,7 @@ pub async fn upload_file(
             }
         }
         FileStatus::Error(e) => {
-            return Err(anyhow::anyhow!(
-                "Unexpected state in is_file_uploaded: {}",
-                e
-            ));
+            return Err(anyhow::anyhow!("Unexpected state in is_file_uploaded: {}", e));
         }
     }
     Ok(())

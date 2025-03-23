@@ -20,6 +20,7 @@ pub enum Commands {
     Upload(UploadArgs),
     Sync(SyncArgs),
     Decrypt(DecryptArgs),
+    DecryptWithKey(DecryptWithKeyArgs), // Ny kommando fra tidligere
 }
 
 #[derive(Subcommand)]
@@ -42,6 +43,13 @@ pub enum ConfigSubcommands {
         #[clap(short, long)]
         config_path: Option<String>,
     },
+    /// Export the master encryption key from keyring
+    ExportKey,
+    /// Import a master encryption key into keyring
+    ImportKey {
+        /// Base64-encoded master key to import
+        key: String,
+    },
 }
 
 #[derive(Args)]
@@ -60,21 +68,29 @@ pub struct SyncArgs {
 
 #[derive(Args)]
 pub struct DecryptArgs {
-    /// Source to decrypt: either a local file path or a URL from cdn.sdrive.pro
     #[clap(subcommand)]
     pub source: DecryptSource,
-    /// Optional output file path (defaults to <filename>.decrypted or decrypted_<timestamp>.bin for URLs)
     #[clap(short, long)]
     pub output: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
 pub enum DecryptSource {
-    /// Decrypt a local file
     File {
         #[clap(parse(from_os_str))]
         path: PathBuf,
     },
-    /// Decrypt a file from a URL (e.g., https://cdn.sdrive.pro/<guid>/<filename>)
-    Url { url: String },
+    Url {
+        url: String,
+    },
+}
+
+#[derive(Args)]
+pub struct DecryptWithKeyArgs {
+    #[clap(parse(from_os_str))]
+    pub file: PathBuf,
+    #[clap(short, long)]
+    pub output: Option<PathBuf>,
+    /// Base64-encoded per-file key
+    pub key: String,
 }
