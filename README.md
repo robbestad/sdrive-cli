@@ -1,15 +1,10 @@
-# SDRIVE UPLOAD
-12
+# SDRIVE UPLOAD WITH E2E 
 
 #### To use:
 
 - Create an API key at `https://sdrive.pro` 
-- Stake Credits for payment. 1 Credit = 100KB. 
-- Run `sdrive config create` to add this key and your GUID to your sdrive.toml
+- Run `sdrive config create` to add the API key and your GUID to your sdrive.toml
+- Run `sdrive config generate-key` to create a secure encryption and decryption key in your keyring
 
-To upload, write `sdrive upload <file>` when you want to upload something
+To upload: `sdrive upload <file>` 
 
-##### Credits
-
-You can get Credits directly from here: https://jup.ag/swap/SOL-CREDITS_4ptcYkUypE7sDH82oXaeykaAJunuB4yeDJeiLJwS2nQc 
-or buy an SDrive NFT to get Credits emissions: https://mint.sdrive.app

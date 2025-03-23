@@ -1,15 +1,18 @@
+use crate::encryption;
 use serde::Deserialize;
+use serde::Serialize;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct Config {
     pub rpc_url: Option<String>,
     pub sync_dir: Option<String>,
     pub user_guid: Option<String>,
     pub api_key: Option<String>,
     pub keypair_path: Option<String>,
+    pub encryption_key: Option<String>,
 }
 
 impl Default for Config {
@@ -20,8 +23,21 @@ impl Default for Config {
             user_guid: None,
             api_key: None,
             keypair_path: None,
+            encryption_key: None,
         }
     }
+}
+
+pub async fn generate_and_save_key(_config_path_option: Option<String>) -> io::Result<()> {
+    // Generer en ny 32-bytes krypteringsnøkkel
+    let key = encryption::generate_key();
+
+    // Lagre nøkkelen i keyring (det sikre systemlagret)
+    encryption::store_key(&key).expect("Kunne ikke lagre nøkkelen i keyring");
+
+    println!("Krypteringsnøkkel generert og lagret i systemets sikre nøkkellager (keyring).");
+
+    Ok(())
 }
 
 async fn prompt_for_input_or_default(
@@ -89,6 +105,7 @@ pub async fn prompt_and_save_config(
             user_guid: None,
             api_key: None,
             keypair_path: None,
+            encryption_key: None,
         })
     } else {
         Config {
@@ -97,6 +114,7 @@ pub async fn prompt_and_save_config(
             user_guid: None,
             api_key: None,
             keypair_path: None,
+            encryption_key: None,
         }
     };
     let sync_dir = set_value(
@@ -106,8 +124,18 @@ pub async fn prompt_and_save_config(
     )
     .await?;
     let api_key = set_value(api_key_option, config.api_key, "Please enter your API key").await?;
-    let user_guid = set_value(user_guid_option, config.user_guid, "Please enter your GUID or press Enter to ignore").await?;
-    let rpc_url = set_value(rpc_url_option, config.rpc_url, "Please enter your RPC URL or press Enter to ignore").await?;
+    let user_guid = set_value(
+        user_guid_option,
+        config.user_guid,
+        "Please enter your GUID or press Enter to ignore",
+    )
+    .await?;
+    let rpc_url = set_value(
+        rpc_url_option,
+        config.rpc_url,
+        "Please enter your RPC URL or press Enter to ignore",
+    )
+    .await?;
     let keypair_path = set_value(
         keypair_path_option,
         config.keypair_path,

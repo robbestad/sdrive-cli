@@ -1,6 +1,6 @@
 [package]
 name = "sdrive"
-version = "1.3.6"
+version = "1.3.7"
 edition = "2021"
 description = "Command line tool for uploading and managing files on SDrive."
 license = "MIT"
@@ -29,4 +29,10 @@ anyhow = "1.0.81"
 solana-client = "1.7.11"
 solana-sdk = "1.7.11"
 solana-program = "1.18.7"
+aes-gcm = "0.10.3"
+rand = "0.9.0"
+base64 = "0.22.1"
+keyring = { version = "3.6.2", features = ["apple-native"] }
+url = "2.5.4"
+
 
