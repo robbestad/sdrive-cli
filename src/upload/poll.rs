@@ -21,6 +21,7 @@ pub async fn poll_file_status(client: &Client, file_guid: &str) -> Result<String
     while !is_finished && wait_seconds < max_attempts {
         let url = format!("https://api.sdrive.app/api/v1/files?guid={}", file_guid);
         tracing::debug!("Polling URL: {}", url); // Debug the polling URL
+        tracing::debug!("Response url: {}", url); // Debug the response body
 
         let response = client
             .get(&url)

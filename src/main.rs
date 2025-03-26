@@ -120,7 +120,9 @@ async fn main() -> Result<()> {
                         .and_then(|mut segments| segments.nth(1))
                         .ok_or_else(|| anyhow::anyhow!("Missing GUID in IPFS URL"))?;
 
-                    let api_url = format!("https://api.sdrive.app/v1/files?guid={}", guid);
+                    let api_url = format!("https://backend.sdrive.app/cid-to-guid?cid={}", guid);
+                    tracing::debug!("Response url: {}", api_url); // Debug the response body
+
                     let response = client.get(&api_url).send().await?;
                     if !response.status().is_success() {
                         return Err(anyhow::anyhow!(
