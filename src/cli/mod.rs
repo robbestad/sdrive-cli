@@ -54,6 +54,9 @@ pub struct UploadArgs {
     pub path: PathBuf,
     #[clap(short, long)]
     pub config_path: Option<String>,
+    /// Upload without encryption
+    #[clap(long)]
+    pub unencrypted: bool,
 }
 
 #[derive(Args)]
@@ -70,7 +73,7 @@ pub struct DownloadArgs {
     pub output: Option<PathBuf>,
 
     #[clap(short = 'k', long = "key")]
-    pub key: Option<String>, // ← Valgfri nøkkel
+    pub key: Option<String>, // Optional key
 }
 #[derive(Args)]
 pub struct DecryptArgs {

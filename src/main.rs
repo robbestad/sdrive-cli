@@ -36,6 +36,7 @@ async fn main() -> Result<()> {
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf(),
                 config_path.expect("Failed to provide config path"),
+                args.unencrypted, 
             )
             .await?;
         }

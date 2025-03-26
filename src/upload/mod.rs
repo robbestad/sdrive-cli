@@ -202,11 +202,12 @@ pub async fn process_upload(
     path: PathBuf,
     parent_folder: PathBuf,
     config_path: String,
+    unencrypted: bool,
 ) -> Result<()> {
     if path.is_file() {
-        upload_file(path, parent_folder, config_path).await?;
+        upload_file(path, parent_folder, config_path, unencrypted).await?;
     } else if path.is_dir() {
-        handle_directory(&path, &config_path).await?;
+        handle_directory(&path, &config_path, unencrypted).await?;
     } else {
         eprintln!("The specified path is neither a file nor a directory.");
     }
@@ -217,6 +218,7 @@ pub async fn upload_file(
     file_path: PathBuf,
     parent_folder: PathBuf,
     config_path: String,
+    unencrypted: bool,
 ) -> Result<()> {
     let config = read_config(Some(config_path)).await?;
     let file_name = match file_path.file_name() {
@@ -224,10 +226,12 @@ pub async fn upload_file(
         None => panic!("Failed to get the file name."),
     };
     println!("🚀 Uploading {}", &file_name);
+    
     let mut folder = parent_folder.display().to_string();
     if !folder.starts_with("/") {
         folder.insert(0, '/');
     }
+    
     let api_key = config.api_key.as_deref().unwrap_or("");
     let user_guid = config.user_guid.as_deref().unwrap_or("");
     let is_valid = is_valid_api_key(&api_key).await?;
@@ -235,49 +239,51 @@ pub async fn upload_file(
         println!("\rThe API key is invalid.");
         return Err(anyhow::anyhow!("Invalid API key"));
     }
-    let (encrypted_content, per_file_key) = encrypt_file(&file_path)?;
-    //fs::write("test_encrypted.enc", &encrypted_content)?; // Debugging
-    //tracing::debug!("Saved encrypted file to test_encrypted.enc for debugging, size: {} bytes", encrypted_content.len());
-    let encrypted_file_size = encrypted_content.len();
-    if encrypted_file_size < 56 {
-        return Err(anyhow::anyhow!(
-            "Encrypted data too short to contain key and nonce: {} bytes",
-            encrypted_file_size
-        ));
-    }
-    let (_encrypted_key, rest) = encrypted_content.split_at(32);
-    let (_key_nonce, rest) = rest.split_at(12);
-    let (nonce, _ciphertext) = rest.split_at(12);
-    let nonce_b64 = STANDARD.encode(nonce);
-    //tracing::info!("🔑 To share this file securely, use this file key: {}", STANDARD.encode(per_file_key));
-    println!("🔑 To share this file securely, use this file key");
-    println!("🔑 {}", STANDARD.encode(per_file_key));
-    tracing::debug!("Nonce (base64): {}", nonce_b64);
-
-    let mime_type = from_path(&file_path).first_or_octet_stream();
-    let mime = mime_type.essence_str().to_string();
-    let ext: Cow<str> = file_path
-        .extension()
-        .map_or(Cow::Borrowed(""), |e| e.to_string_lossy());
-    let file_status = is_file_uploaded(&api_key, &file_name, &encrypted_file_size).await;
+    
+    // Hvis --unencrypted er satt, hopp over kryptering
+    let (file_content, nonce_b64, _per_file_key_option) = if unencrypted {
+        let content = std::fs::read(&file_path)?;
+        (content, "".to_string(), None)
+    } else {
+        let (encrypted_content, per_file_key) = encrypt_file(&file_path)?;
+        let encrypted_file_size = encrypted_content.len();
+        if encrypted_file_size < 56 {
+            return Err(anyhow::anyhow!(
+                "Encrypted data too short to contain key and nonce: {} bytes",
+                encrypted_file_size
+            ));
+        }
+        // Ekstraher nonce (merk at dette avhenger av hvordan `encrypt_file` pakker data)
+        let (_encrypted_key, rest) = encrypted_content.split_at(32);
+        let (_key_nonce, rest) = rest.split_at(12);
+        let (nonce, _ciphertext) = rest.split_at(12);
+        let nonce_b64 = STANDARD.encode(nonce);
+        println!("🔑 To share this file securely, use this file key");
+        println!("🔑 {}", STANDARD.encode(per_file_key));
+        (encrypted_content, nonce_b64, Some(per_file_key))
+    };
+    
+    let file_size = file_content.len();
+    let file_hash = compute_sha256_for_filename_and_size(&file_name, file_size);
+    
+    let file_status = is_file_uploaded(&api_key, &file_name, &file_size).await;
     match file_status {
         FileStatus::AlreadyUploaded => {
             println!(
                 "\rYou have recently uploaded this file. Likely url: https://cdn.sdrive.pro/{}/{}",
-                &user_guid, &file_name
+                user_guid, file_name
             );
-            io::stdout().flush()?;
+            std::io::stdout().flush()?;
             return Ok(());
         }
         FileStatus::NotUploaded => {
-            let file_hash = compute_sha256_for_filename_and_size(&file_name, encrypted_file_size);
             let file_guid = &file_hash[0..24].to_string();
             let chunk_size = 1048576; // 1MB
-            let mut chunk_count = encrypted_file_size / chunk_size + 1;
-            if encrypted_file_size % chunk_size == 0 {
+            let mut chunk_count = file_size / chunk_size + 1;
+            if file_size % chunk_size == 0 {
                 chunk_count -= 1;
             }
-            let client = Client::new();
+            let client = reqwest::Client::new();
             let pb = ProgressBar::new(chunk_count as u64);
             pb.set_style(
                 ProgressStyle::default_bar()
@@ -287,8 +293,8 @@ pub async fn upload_file(
             let mut chunks = Vec::new();
             for i in 0..chunk_count {
                 let start = i * chunk_size;
-                let end = min(start + chunk_size, encrypted_file_size);
-                let chunk = &encrypted_content[start..end];
+                let end = std::cmp::min(start + chunk_size, file_size);
+                let chunk = &file_content[start..end];
                 upload_chunk(chunk, i, &file_name, &file_guid, &api_key, &pb).await?;
                 chunks.push(ChunkInfo {
                     chunk_index: i,
@@ -297,25 +303,29 @@ pub async fn upload_file(
                 });
             }
             pb.finish_with_message("Upload completed\n");
+            
+            // Fullfør opplastingen – i unencrypted modus kan nonce være en tom streng
             complete_upload(&file_guid, chunk_count, &chunks, &api_key, &nonce_b64).await?;
+            
+            // Endelig POST-request for å signalisere ferdig opplasting
             let response = client
                 .post("https://upload.sdrive.app/processupload")
                 .header("Content-Type", "application/json")
                 .json(&json!({
                     "fileName": file_name,
                     "guid": file_guid,
-                    "fileSize": encrypted_file_size,
+                    "fileSize": file_size,
                     "fileIndex": 0,
                     "count": chunk_count,
                     "owner": "",
                     "userid": 0,
                     "storageAccount": "none",
-                    "encrypted": true,
+                    "encrypted": !unencrypted, // setter false om --unencrypted er satt
                     "nonce": nonce_b64,
                     "transcode": false,
                     "username": "anon",
-                    "mime": mime,
-                    "ext": &*ext,
+                    "mime": from_path(&file_path).first_or_octet_stream().essence_str().to_string(),
+                    "ext": file_path.extension().map_or("".to_string(), |e| e.to_string_lossy().to_string()),
                     "folder": "/",
                     "user_guid": user_guid,
                     "mode": "ctr",
@@ -324,11 +334,11 @@ pub async fn upload_file(
                 }))
                 .send()
                 .await?;
-            if response.status() == StatusCode::ACCEPTED {
-                io::stdout().flush()?;
+            if response.status() == reqwest::StatusCode::ACCEPTED {
+                std::io::stdout().flush()?;
             } else {
                 println!("Upload failed…");
-                io::stdout().flush()?;
+                std::io::stdout().flush()?;
                 return Ok(());
             }
             let _response_hash = client
@@ -339,8 +349,8 @@ pub async fn upload_file(
                 }))
                 .send()
                 .await?;
-            if response.status() == StatusCode::ACCEPTED {
-                io::stdout().flush()?;
+            if response.status() == reqwest::StatusCode::ACCEPTED {
+                std::io::stdout().flush()?;
             }
             let _response_uploaded = client
                 .post("https://upload.sdrive.app/api/v1/files")
@@ -351,9 +361,9 @@ pub async fn upload_file(
                 }))
                 .send()
                 .await?;
-            if response.status() == StatusCode::ACCEPTED {
+            if response.status() == reqwest::StatusCode::ACCEPTED {
                 println!("✅ Upload success. Finalizing URL...");
-                io::stdout().flush()?;
+                std::io::stdout().flush()?;
             }
             match poll_file_status(&client, &file_guid).await {
                 Ok(url) => println!("🔗 Your file is available at: {}", url),
@@ -361,18 +371,18 @@ pub async fn upload_file(
             }
         }
         FileStatus::Error(e) => {
-            return Err(anyhow::anyhow!(
-                "Unexpected state in is_file_uploaded: {}",
-                e
-            ));
+            return Err(anyhow::anyhow!("Unexpected state in is_file_uploaded: {}", e));
         }
     }
     Ok(())
 }
 
 #[async_recursion::async_recursion]
-pub async fn handle_directory(dir_path: &Path, config_path: &String) -> Result<()> {
-    // Endret til anyhow::Result
+pub async fn handle_directory(
+    dir_path: &Path,
+    config_path: &String,
+    unencrypted: bool,
+) -> Result<()> {
     for entry in std::fs::read_dir(dir_path)? {
         let entry_path = entry?.path();
         if entry_path.is_file() {
@@ -381,10 +391,11 @@ pub async fn handle_directory(dir_path: &Path, config_path: &String) -> Result<(
                 entry_path.clone(),
                 parent_folder.to_path_buf(),
                 config_path.to_string(),
+                unencrypted,
             )
             .await?;
         } else if entry_path.is_dir() {
-            handle_directory(&entry_path, config_path).await?;
+            handle_directory(&entry_path, config_path, unencrypted).await?;
         }
     }
     Ok(())
