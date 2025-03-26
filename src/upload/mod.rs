@@ -2,15 +2,15 @@ use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
 use indicatif::{ProgressBar, ProgressStyle};
 use mime_guess::from_path;
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use sha2::{Digest, Sha256};
-use std::borrow::Cow;
-use std::cmp::min;
 use std::fmt;
-use std::io::{self, Write};
 use std::path::Path;
 use tokio::time::sleep;
 use tokio::time::Duration;
+use std::fs::File;
+use std::io::{self, Write, Read};
+use crate::file::file_exists_head;
 
 use crate::config::read_config;
 use crate::encryption::encrypt_file; // Importer krypteringsfunksjonen
@@ -44,11 +44,28 @@ fn compute_sha256(data: &[u8]) -> String {
     let result = hasher.finalize();
     format!("{:x}", result)
 }
-fn compute_sha256_for_filename_and_size(file_name: &str, file_size: usize) -> String {
-    let mut data = file_name.as_bytes().to_vec();
+
+fn compute_sha256_for_filename_size_and_content(file_path: &str) -> io::Result<String> {
+    // Open the file
+    let mut file = File::open(file_path)?;
+    
+    // Get file size
+    let file_size = file.metadata()?.len() as usize;
+    
+    // Create initial data with filename
+    let mut data = file_path.as_bytes().to_vec();
+    
+    // Add file size
     let size_bytes = file_size.to_le_bytes();
     data.extend(&size_bytes);
-    compute_sha256(&data)
+    
+    // Read first 1024 bytes (or less if file is smaller)
+    let mut buffer = vec![0u8; 1024.min(file_size)];
+    let bytes_read = file.read(&mut buffer)?;
+    data.extend_from_slice(&buffer[..bytes_read]);
+    
+    // Compute and return SHA256
+    Ok(compute_sha256(&data))
 }
 
 #[derive(Debug, Serialize)]
@@ -72,7 +89,7 @@ async fn complete_upload(
     chunk_count: usize,
     chunks: &[ChunkInfo],
     api_key: &str,
-    nonce_b64: &str, // inkluder nonce som base64
+    _nonce_b64: &str, // inkluder nonce som base64
 ) -> Result<(), reqwest::Error> {
     let client = Client::new();
 
@@ -84,7 +101,6 @@ async fn complete_upload(
             "chunkCount": chunk_count,
             "chunks": chunks,
             "apikey": api_key,
-            "nonce": nonce_b64,  // Send med nonce
         }))
         .send()
         .await?;
@@ -129,8 +145,7 @@ async fn upload_chunk(
     Ok(())
 }
 
-async fn is_file_uploaded(api_key: &str, file_name: &str, file_size: &usize) -> FileStatus {
-    let file_hash = compute_sha256_for_filename_and_size(file_name, *file_size);
+async fn is_file_uploaded(api_key: &str, _file_name: &str, _file_size: &usize, file_hash: &str) -> FileStatus {
     let url = format!(
         "https://sdrive.app/api/v3/file-exists?key={}&file_hash={}",
         api_key, file_hash
@@ -233,11 +248,31 @@ pub async fn upload_file(
     }
     
     let api_key = config.api_key.as_deref().unwrap_or("");
-    let user_guid = config.user_guid.as_deref().unwrap_or("");
     let is_valid = is_valid_api_key(&api_key).await?;
     if !is_valid {
         println!("\rThe API key is invalid.");
         return Err(anyhow::anyhow!("Invalid API key"));
+    }
+
+    // Hent ut bruker GUID (lagret i config)
+    let user_guid = config.user_guid.as_deref().unwrap_or("");
+    if user_guid.is_empty() {
+        return Err(anyhow::anyhow!("User GUID er ikke satt i config"));
+    }
+    
+    // Sjekk om filen allerede finnes
+    let mut overwrite_file: bool = false;
+
+    if file_exists_head(user_guid, &file_name).await? {
+        println!("Filen \"{}\" er allerede lastet opp for bruker {}.", file_name, user_guid);
+        println!("Ønsker du å overskrive filen? (y/n)");
+        let mut decision = String::new();
+        std::io::stdin().read_line(&mut decision)?;
+        if decision.trim().to_lowercase() != "y" {
+            println!("Opplasting avbrutt.");
+            return Ok(());
+        }
+        overwrite_file = true;
     }
     
     // Hvis --unencrypted er satt, hopp over kryptering
@@ -264,9 +299,9 @@ pub async fn upload_file(
     };
     
     let file_size = file_content.len();
-    let file_hash = compute_sha256_for_filename_and_size(&file_name, file_size);
+    let file_hash = compute_sha256_for_filename_size_and_content(file_path.to_str().unwrap())?;
     
-    let file_status = is_file_uploaded(&api_key, &file_name, &file_size).await;
+    let file_status = is_file_uploaded(&api_key, &file_name, &file_size, &file_hash).await;
     match file_status {
         FileStatus::AlreadyUploaded => {
             println!(
@@ -306,7 +341,13 @@ pub async fn upload_file(
             
             // Fullfør opplastingen – i unencrypted modus kan nonce være en tom streng
             complete_upload(&file_guid, chunk_count, &chunks, &api_key, &nonce_b64).await?;
-            
+            tracing::debug!("Upload completed");
+            tracing::debug!("API key: {}", api_key);
+            tracing::debug!("User GUID: {}", user_guid);
+            tracing::debug!("File name: {}", file_name);
+            tracing::debug!("File size: {}", file_size);
+            tracing::debug!("File hash: {}", file_hash);
+            tracing::debug!("Overwrite file: {}", overwrite_file);
             // Endelig POST-request for å signalisere ferdig opplasting
             let response = client
                 .post("https://upload.sdrive.app/processupload")
@@ -319,6 +360,7 @@ pub async fn upload_file(
                     "count": chunk_count,
                     "owner": "",
                     "userid": 0,
+                    "overwrite": overwrite_file,
                     "storageAccount": "none",
                     "encrypted": !unencrypted, // setter false om --unencrypted er satt
                     "nonce": nonce_b64,
@@ -331,6 +373,7 @@ pub async fn upload_file(
                     "mode": "ctr",
                     "storageNetwork": "ipfs",
                     "apikey": api_key,
+                    "user_guid": user_guid,
                 }))
                 .send()
                 .await?;

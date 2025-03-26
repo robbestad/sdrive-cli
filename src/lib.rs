@@ -4,3 +4,4 @@ pub mod encryption;
 pub mod fingerprint;
 pub mod parse;
 pub mod upload;
+pub mod file;
