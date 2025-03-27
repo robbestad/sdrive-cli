@@ -6,9 +6,10 @@ use clap::Parser;
 use reqwest::Client;
 use sdrive::{
     cli::{Cli, Commands, ConfigSubcommands},
-    config::{generate_and_save_key, get_config_path, prompt_and_save_config},
+    config::{generate_and_save_key, get_config_path, prompt_and_save_config, read_config},
     encryption::{decrypt_file, export_key, import_key, DecryptedData},
     upload::process_upload,
+    file::fetch_guid_from_cid,
 };
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -36,7 +37,8 @@ async fn main() -> Result<()> {
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf(),
                 config_path.expect("Failed to provide config path"),
-                args.unencrypted, 
+                args.unencrypted,
+                args.overwrite,
             )
             .await?;
         }
@@ -121,22 +123,15 @@ async fn main() -> Result<()> {
                         .and_then(|mut segments| segments.nth(1))
                         .ok_or_else(|| anyhow::anyhow!("Missing GUID in IPFS URL"))?;
 
-                    let api_url = format!("https://backend.sdrive.app/cid-to-guid?cid={}", guid);
-                    tracing::debug!("Response url: {}", api_url); // Debug the response body
-
-                    let response = client.get(&api_url).send().await?;
-                    if !response.status().is_success() {
-                        return Err(anyhow::anyhow!(
-                            "Failed to fetch file metadata: {}",
-                            response.status()
-                        ));
-                    }
-
-                    let json: serde_json::Value = response.json().await?;
-                    json.get("filename")
+                    let config_path = Some(get_config_path().expect("Failed to get config path"));
+                    let config = read_config(config_path).await?;
+                    let api_key = config.api_key.as_deref().unwrap_or("");
+                    let response: serde_json::Value = fetch_guid_from_cid(&client, &guid, &api_key).await?;
+                    let filename = response.get("filename")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
-                        .unwrap_or_else(|| "downloaded".to_string())
+                        .unwrap_or_else(|| "downloaded".to_string());
+                    filename
                 }
                 _ => unreachable!(),
             };

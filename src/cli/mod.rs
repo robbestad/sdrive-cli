@@ -57,6 +57,9 @@ pub struct UploadArgs {
     /// Upload without encryption
     #[clap(long)]
     pub unencrypted: bool,
+    /// Overwrite existing file
+    #[clap(long)]
+    pub overwrite: bool,
 }
 
 #[derive(Args)]

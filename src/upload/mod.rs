@@ -10,7 +10,6 @@ use tokio::time::sleep;
 use tokio::time::Duration;
 use std::fs::File;
 use std::io::{self, Write, Read};
-use crate::file::file_exists_head;
 
 use crate::config::read_config;
 use crate::encryption::encrypt_file; // Importer krypteringsfunksjonen
@@ -218,11 +217,12 @@ pub async fn process_upload(
     parent_folder: PathBuf,
     config_path: String,
     unencrypted: bool,
+    overwrite: bool,
 ) -> Result<()> {
     if path.is_file() {
-        upload_file(path, parent_folder, config_path, unencrypted).await?;
+        upload_file(path, parent_folder, config_path, unencrypted, overwrite).await?;
     } else if path.is_dir() {
-        handle_directory(&path, &config_path, unencrypted).await?;
+        handle_directory(&path, &config_path, unencrypted, overwrite).await?;
     } else {
         eprintln!("The specified path is neither a file nor a directory.");
     }
@@ -234,6 +234,7 @@ pub async fn upload_file(
     parent_folder: PathBuf,
     config_path: String,
     unencrypted: bool,
+    overwrite: bool,
 ) -> Result<()> {
     let config = read_config(Some(config_path)).await?;
     let file_name = match file_path.file_name() {
@@ -260,20 +261,21 @@ pub async fn upload_file(
         return Err(anyhow::anyhow!("User GUID er ikke satt i config"));
     }
     
-    // Sjekk om filen allerede finnes
-    let mut overwrite_file: bool = false;
+    // // Sjekk om filen allerede finnes
+    let overwrite_file: bool = overwrite;
 
-    if file_exists_head(user_guid, &file_name).await? {
-        println!("Filen \"{}\" er allerede lastet opp for bruker {}.", file_name, user_guid);
-        println!("Ønsker du å overskrive filen? (y/n)");
-        let mut decision = String::new();
-        std::io::stdin().read_line(&mut decision)?;
-        if decision.trim().to_lowercase() != "y" {
-            println!("Opplasting avbrutt.");
-            return Ok(());
-        }
-        overwrite_file = true;
-    }
+    // if file_exists_head(user_guid, &file_name).await? {
+    //     println!("Filen \"{}\" er allerede lastet opp for bruker {}.", file_name, user_guid);
+    //     println!("Ønsker du å overskrive filen? (y/n)");
+    //     let mut decision = String::new();
+    //     std::io::stdin().read_line(&mut decision)?;
+    //     if decision.trim().to_lowercase() != "y" {
+    //         println!("Opplasting avbrutt.");
+    //         return Ok(());
+    //     }
+    //     overwrite_file = true;
+    // }
+
     
     // Hvis --unencrypted er satt, hopp over kryptering
     let (file_content, nonce_b64, _per_file_key_option) = if unencrypted {
@@ -425,6 +427,7 @@ pub async fn handle_directory(
     dir_path: &Path,
     config_path: &String,
     unencrypted: bool,
+    overwrite: bool,
 ) -> Result<()> {
     for entry in std::fs::read_dir(dir_path)? {
         let entry_path = entry?.path();
@@ -435,10 +438,11 @@ pub async fn handle_directory(
                 parent_folder.to_path_buf(),
                 config_path.to_string(),
                 unencrypted,
+                overwrite,
             )
             .await?;
         } else if entry_path.is_dir() {
-            handle_directory(&entry_path, config_path, unencrypted).await?;
+            handle_directory(&entry_path, config_path, unencrypted, overwrite).await?;
         }
     }
     Ok(())

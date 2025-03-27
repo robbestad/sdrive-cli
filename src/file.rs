@@ -1,5 +1,7 @@
 use reqwest::StatusCode;
 use anyhow::Result;
+use reqwest::Client;
+use serde_json::json;
 
 pub async fn check_file_exists(user_guid: &str, file_name: &str) -> Result<bool> {
     let url = format!(
@@ -33,4 +35,30 @@ pub async fn file_exists_head(user_guid: &str, file_name: &str) -> Result<bool> 
             Ok(false)
         }
     }
+}
+
+pub async fn fetch_guid_from_cid(client: &Client, guid: &str, apikey: &str) -> Result<serde_json::Value> {
+    let api_url = "https://backend.sdrive.app/cid-to-guid";
+    tracing::debug!("Sending POST request to: {}", api_url);
+
+    let payload = json!({
+        "cid": guid,
+        "apikey": apikey
+    });
+
+    let response = client
+        .post(api_url)
+        .json(&payload)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to fetch file metadata: {}",
+            response.status()
+        ));
+    }
+
+    let json: serde_json::Value = response.json().await?;
+    Ok(json)
 }
