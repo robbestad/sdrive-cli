@@ -6,10 +6,11 @@ use clap::Parser;
 use reqwest::Client;
 use sdrive::{
     cli::{Cli, Commands, ConfigSubcommands},
-    config::{generate_and_save_key, get_config_path, prompt_and_save_config, read_config},
+    config::{generate_and_save_key, prompt_and_save_config, read_config},
     encryption::{decrypt_file, export_key, import_key, DecryptedData},
     upload::process_upload,
     file::fetch_guid_from_cid,
+    secret::get_config_path,
 };
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -65,7 +66,7 @@ async fn main() -> Result<()> {
                 generate_and_save_key(config_path).await?;
             }
             ConfigSubcommands::ExportKey => {
-                let key = export_key()?;
+                let key = export_key().await?;
                 println!("Master encryption key (base64): {}", key);
             }
             ConfigSubcommands::ImportKey { key } => {
@@ -82,7 +83,7 @@ async fn main() -> Result<()> {
                 path
             });
 
-            let decrypted: DecryptedData<Vec<u8>> = decrypt_file(&args.file, Some(&output_path))?;
+            let decrypted: DecryptedData<Vec<u8>> = decrypt_file(&args.file, Some(&output_path)).await?;
             match decrypted {
                 DecryptedData::Raw(_) => println!(
                     "✅ File decrypted successfully to {}",
@@ -176,7 +177,7 @@ async fn main() -> Result<()> {
                 fs::write(&temp_file, &encrypted_data).await?;
 
                 let decrypted: DecryptedData<Vec<u8>> =
-                    decrypt_file(&temp_file, Some(&output_path))?;
+                    decrypt_file(&temp_file, Some(&output_path)).await?;
                 fs::remove_file(&temp_file).await?;
 
                 match decrypted {

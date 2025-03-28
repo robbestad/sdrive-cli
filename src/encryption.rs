@@ -12,6 +12,8 @@ use serde_json;
 use std::fs;
 use std::path::Path;
 
+use crate::secret::get_value_from_env_or_config;
+
 pub fn generate_key() -> [u8; 32] {
     let mut key = [0u8; 32];
     rng().fill_bytes(&mut key);
@@ -28,21 +30,21 @@ pub fn store_key(key: &[u8; 32]) -> Result<()> {
     Ok(())
 }
 
-pub fn retrieve_key() -> Result<[u8; 32]> {
-    let entry = Entry::new("sdrive", "master_key")?;
-    let key_string = entry.get_password()?;
-    //println!("Retrieved master key (base64): {}", key_string);
+pub async fn retrieve_key() -> Result<[u8; 32]> {
+    let key_string = get_value_from_env_or_config("SDRIVE_ENCRYPTION_KEY", "encryption_key", Some("sdrive")).await?;
+    
     let decoded = STANDARD.decode(&key_string)?;
     if decoded.len() != 32 {
-        return Err(anyhow::anyhow!("Invalid key length"));
+        return Err(anyhow::anyhow!("Invalid encryption key length"));
     }
+
     let mut key = [0u8; 32];
     key.copy_from_slice(&decoded);
     Ok(key)
 }
 
-pub fn export_key() -> Result<String> {
-    let key = retrieve_key()?;
+pub async fn export_key() -> Result<String> {
+    let key = retrieve_key().await?;
     let key_string = STANDARD.encode(key);
     Ok(key_string)
 }
@@ -66,10 +68,10 @@ fn encrypt_data(key: &[u8; 32], plaintext: &[u8]) -> Result<(Vec<u8>, [u8; 12]),
     let ciphertext = cipher.encrypt(nonce_obj, plaintext)?;
     Ok((ciphertext, nonce))
 }
-pub fn encrypt_file(file_path: &Path) -> Result<(Vec<u8>, [u8; 32])> {
+pub async fn encrypt_file(file_path: &Path) -> Result<(Vec<u8>, [u8; 32])> {
     let plaintext = fs::read(file_path)?;
     tracing::debug!("⚙️ Plaintext size: {} bytes", plaintext.len());
-    let master_key = retrieve_key()?;
+    let master_key = retrieve_key().await?;
 
     let per_file_key = generate_key();
     let (ciphertext, nonce) = encrypt_data(&per_file_key, &plaintext)
@@ -118,9 +120,9 @@ pub enum DecryptedData<T> {
     Structured(T),
 }
 
-pub fn decrypt_file<T: DeserializeOwned + 'static>(
+pub async fn decrypt_file<T: DeserializeOwned + 'static>(
     encrypted_file_path: &Path,
-    output_file_path: Option<&Path>,
+    output_file_path: Option<&Path>
 ) -> Result<DecryptedData<T>> {
     let encrypted_data = fs::read(encrypted_file_path)?;
     tracing::trace!("Encrypted data size: {} bytes", encrypted_data.len());
@@ -147,7 +149,7 @@ pub fn decrypt_file<T: DeserializeOwned + 'static>(
     nonce.copy_from_slice(nonce_bytes);
     tracing::trace!("Nonce (hex): {}", hex::encode(nonce));
 
-    let master_key = retrieve_key()?;
+    let master_key = retrieve_key().await?;
     let cipher = Aes256Gcm::new_from_slice(&master_key).expect("Valid key size");
     tracing::trace!("Master key (hex): {}", hex::encode(&master_key));
     let per_file_key = cipher
@@ -181,7 +183,7 @@ pub fn decrypt_file<T: DeserializeOwned + 'static>(
     }
 }
 
-pub fn export_per_file_key(encrypted_file_path: &Path) -> Result<String> {
+pub async fn export_per_file_key(encrypted_file_path: &Path) -> Result<String> {
     let encrypted_data = fs::read(encrypted_file_path)?;
 
     if encrypted_data.len() < 72 {
@@ -197,7 +199,7 @@ pub fn export_per_file_key(encrypted_file_path: &Path) -> Result<String> {
     let mut key_nonce = [0u8; 12];
     key_nonce.copy_from_slice(key_nonce_bytes);
 
-    let master_key = retrieve_key()?;
+    let master_key = retrieve_key().await?;
     let cipher = Aes256Gcm::new_from_slice(&master_key).expect("Valid key size");
 
     let per_file_key = cipher

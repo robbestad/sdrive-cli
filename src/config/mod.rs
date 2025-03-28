@@ -159,16 +159,7 @@ pub async fn prompt_and_save_config(
     Ok(())
 }
 
-pub fn get_config_path() -> Option<String> {
-    Some(
-        dirs::home_dir()
-            .expect("Failed to find home directory")
-            .join(".config")
-            .join("sdrive")
-            .to_string_lossy()
-            .to_string(),
-    )
-}
+
 
 pub async fn read_config(config_path_option: Option<String>) -> Result<Config, io::Error> {
     let config_file_path = match config_path_option {

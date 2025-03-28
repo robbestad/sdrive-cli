@@ -1,3 +1,4 @@
+use crate::secret::{get_secure_value, get_value_from_env_or_config};
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -5,11 +6,11 @@ use mime_guess::from_path;
 use reqwest::Client;
 use sha2::{Digest, Sha256};
 use std::fmt;
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::path::Path;
 use tokio::time::sleep;
 use tokio::time::Duration;
-use std::fs::File;
-use std::io::{self, Write, Read};
 
 use crate::config::read_config;
 use crate::encryption::encrypt_file; // Importer krypteringsfunksjonen
@@ -47,22 +48,22 @@ fn compute_sha256(data: &[u8]) -> String {
 fn compute_sha256_for_filename_size_and_content(file_path: &str) -> io::Result<String> {
     // Open the file
     let mut file = File::open(file_path)?;
-    
+
     // Get file size
     let file_size = file.metadata()?.len() as usize;
-    
+
     // Create initial data with filename
     let mut data = file_path.as_bytes().to_vec();
-    
+
     // Add file size
     let size_bytes = file_size.to_le_bytes();
     data.extend(&size_bytes);
-    
+
     // Read first 1024 bytes (or less if file is smaller)
     let mut buffer = vec![0u8; 1024.min(file_size)];
     let bytes_read = file.read(&mut buffer)?;
     data.extend_from_slice(&buffer[..bytes_read]);
-    
+
     // Compute and return SHA256
     Ok(compute_sha256(&data))
 }
@@ -144,7 +145,12 @@ async fn upload_chunk(
     Ok(())
 }
 
-async fn is_file_uploaded(api_key: &str, _file_name: &str, _file_size: &usize, file_hash: &str) -> FileStatus {
+async fn is_file_uploaded(
+    api_key: &str,
+    _file_name: &str,
+    _file_size: &usize,
+    file_hash: &str,
+) -> FileStatus {
     let url = format!(
         "https://sdrive.app/api/v3/file-exists?key={}&file_hash={}",
         api_key, file_hash
@@ -242,47 +248,44 @@ pub async fn upload_file(
         None => panic!("Failed to get the file name."),
     };
     println!("🚀 Uploading {}", &file_name);
-    
+
     let mut folder = parent_folder.display().to_string();
     if !folder.starts_with("/") {
         folder.insert(0, '/');
     }
-    
-    let api_key = config.api_key.as_deref().unwrap_or("");
+
+    // 🔑 Hent API-nøkkel
+    let api_key = get_value_from_env_or_config("SDRIVE_API_KEY", "api_key", Some("sdrive")).await?;
+
+    // 🆔 Hent bruker-GUID
+    let user_guid = get_value_from_env_or_config("SDRIVE_USER_GUID", "user_guid", Some("sdrive")).await?;
+// 🔐 Hent krypteringsnøkkel (hvis filen skal krypteres)
+    let encryption_key = if unencrypted {
+        None
+    } else {
+        Some(get_secure_value("SDRIVE_ENCRYPTION_KEY", "sdrive", "master_key").await?)
+    };
+
     let is_valid = is_valid_api_key(&api_key).await?;
     if !is_valid {
         println!("\rThe API key is invalid.");
         return Err(anyhow::anyhow!("Invalid API key"));
     }
 
-    // Hent ut bruker GUID (lagret i config)
-    let user_guid = config.user_guid.as_deref().unwrap_or("");
     if user_guid.is_empty() {
         return Err(anyhow::anyhow!("User GUID er ikke satt i config"));
     }
-    
+    println!("✅ API Key and User GUID validated.");
+
     // // Sjekk om filen allerede finnes
     let overwrite_file: bool = overwrite;
 
-    // if file_exists_head(user_guid, &file_name).await? {
-    //     println!("Filen \"{}\" er allerede lastet opp for bruker {}.", file_name, user_guid);
-    //     println!("Ønsker du å overskrive filen? (y/n)");
-    //     let mut decision = String::new();
-    //     std::io::stdin().read_line(&mut decision)?;
-    //     if decision.trim().to_lowercase() != "y" {
-    //         println!("Opplasting avbrutt.");
-    //         return Ok(());
-    //     }
-    //     overwrite_file = true;
-    // }
-
-    
     // Hvis --unencrypted er satt, hopp over kryptering
     let (file_content, nonce_b64, _per_file_key_option) = if unencrypted {
         let content = std::fs::read(&file_path)?;
         (content, "".to_string(), None)
     } else {
-        let (encrypted_content, per_file_key) = encrypt_file(&file_path)?;
+        let (encrypted_content, per_file_key) = encrypt_file(&file_path).await?;
         let encrypted_file_size = encrypted_content.len();
         if encrypted_file_size < 56 {
             return Err(anyhow::anyhow!(
@@ -299,10 +302,10 @@ pub async fn upload_file(
         println!("🔑 {}", STANDARD.encode(per_file_key));
         (encrypted_content, nonce_b64, Some(per_file_key))
     };
-    
+
     let file_size = file_content.len();
     let file_hash = compute_sha256_for_filename_size_and_content(file_path.to_str().unwrap())?;
-    
+
     let file_status = is_file_uploaded(&api_key, &file_name, &file_size, &file_hash).await;
     match file_status {
         FileStatus::AlreadyUploaded => {
@@ -340,7 +343,7 @@ pub async fn upload_file(
                 });
             }
             pb.finish_with_message("Upload completed\n");
-            
+
             // Fullfør opplastingen – i unencrypted modus kan nonce være en tom streng
             complete_upload(&file_guid, chunk_count, &chunks, &api_key, &nonce_b64).await?;
             tracing::debug!("Upload completed");
@@ -371,7 +374,6 @@ pub async fn upload_file(
                     "mime": from_path(&file_path).first_or_octet_stream().essence_str().to_string(),
                     "ext": file_path.extension().map_or("".to_string(), |e| e.to_string_lossy().to_string()),
                     "folder": "/",
-                    "user_guid": user_guid,
                     "mode": "ctr",
                     "storageNetwork": "ipfs",
                     "apikey": api_key,
@@ -416,7 +418,10 @@ pub async fn upload_file(
             }
         }
         FileStatus::Error(e) => {
-            return Err(anyhow::anyhow!("Unexpected state in is_file_uploaded: {}", e));
+            return Err(anyhow::anyhow!(
+                "Unexpected state in is_file_uploaded: {}",
+                e
+            ));
         }
     }
     Ok(())
