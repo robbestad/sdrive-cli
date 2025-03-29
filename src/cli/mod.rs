@@ -33,11 +33,7 @@ pub enum ConfigSubcommands {
         #[clap(short, long)]
         user_guid: Option<String>,
         #[clap(short, long)]
-        keypair_path: Option<String>,
-        #[clap(short, long)]
         api_key: Option<String>,
-        #[clap(short, long)]
-        rpc_url: Option<String>,
     },
     GenerateKey {
         #[clap(short, long)]

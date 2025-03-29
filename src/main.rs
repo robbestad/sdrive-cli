@@ -50,11 +50,9 @@ async fn main() -> Result<()> {
         Commands::Config { command } => match command {
             ConfigSubcommands::Create {
                 config_path,
-                rpc_url,
                 sync_dir,
                 api_key,
                 user_guid,
-                keypair_path,
             } => {
                 prompt_and_save_config(
                     config_path,
