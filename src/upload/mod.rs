@@ -512,10 +512,10 @@ pub async fn pin_file(
 
     println!("🔍 HTTP Status (pinning): {}", pin_response.status());
 
-    if pin_response.status() == reqwest::StatusCode::ACCEPTED {
+    if pin_response.status().is_success() {
         pin_remote_ipfs_file(&hash).await?;
-    }
-
+    } 
+    
     if !pin_response.status().is_success() {
         let status = pin_response.status();
         let error_text = pin_response.text().await.unwrap_or_else(|_| "⚠️ Kunne ikke lese feilmelding".to_string());
