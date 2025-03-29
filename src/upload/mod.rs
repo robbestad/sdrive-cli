@@ -16,6 +16,7 @@ use reqwest::multipart::{Form, Part};
 use serde::Serialize;
 use serde_json::json;
 use crate::encryption::encrypt_file;
+use std::error::Error;
 mod poll;
 use poll::poll_file_status;
 
@@ -529,7 +530,7 @@ pub async fn pin_file(
     Ok(hash)
 }
 
-async fn pin_remote_ipfs_file(cid: &str) -> Result<(), Box<dyn Error>> {
+async fn pin_remote_ipfs_file(cid: &str) -> Result<()> {
     let url = format!(
         "http://127.0.0.1:5001/api/v0/pin/remote/add?arg={}&service=sdrive",
         cid
