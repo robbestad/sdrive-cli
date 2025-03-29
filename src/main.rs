@@ -1,5 +1,5 @@
 use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Nonce}; // Importerer Nonce
+use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use clap::Parser;
@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use url::Url;
+use tokio::time::{timeout, Duration};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,13 +55,7 @@ async fn main() -> Result<()> {
                 api_key,
                 user_guid,
             } => {
-                prompt_and_save_config(
-                    config_path,
-                    sync_dir,
-                    api_key,
-                    user_guid,
-                )
-                .await?;
+                prompt_and_save_config(config_path, sync_dir, api_key, user_guid).await?;
             }
             ConfigSubcommands::GenerateKey { config_path } => {
                 generate_and_save_key(config_path).await?;
@@ -103,39 +98,71 @@ async fn main() -> Result<()> {
                 ));
             }
 
-            let response = client.get(&args.url).send().await?;
-            if !response.status().is_success() {
-                return Err(anyhow::anyhow!(
-                    "Failed to download file: {}",
-                    response.status()
-                ));
-            }
-            let encrypted_data = response.bytes().await?.to_vec();
+            let mut encrypted_data: Option<Vec<u8>> = None;
+            let mut original_filename = String::new();
 
-            let original_filename = match host {
-                "cdn.sdrive.pro" => parsed_url
-                    .path_segments()
-                    .and_then(|segments| segments.last())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "downloaded".to_string()),
+            match host {
+                "cdn.sdrive.pro" => {
+                    let response = client.get(&args.url).send().await?;
+                    if !response.status().is_success() {
+                        return Err(anyhow::anyhow!(
+                            "Failed to download file: {}",
+                            response.status()
+                        ));
+                    }
+                    encrypted_data = Some(response.bytes().await?.to_vec());
+                    original_filename = parsed_url
+                        .path_segments()
+                        .and_then(|segments| segments.last())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "downloaded".to_string());
+                }
                 "ipfs.sdrive.pro" => {
                     let guid = parsed_url
                         .path_segments()
                         .and_then(|mut segments| segments.nth(1))
                         .ok_or_else(|| anyhow::anyhow!("Missing GUID in IPFS URL"))?;
 
-                    let config_path = Some(get_config_path().expect("Failed to get config path"));
-                    let config = read_config(config_path).await?;
-                    let api_key = config.api_key.as_str();
-                    let response: serde_json::Value = fetch_guid_from_cid(&client, &guid, api_key).await?;
-                    let filename = response.get("filename")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| "downloaded".to_string());
-                    filename
+                    // Step 1: Check local IPFS node
+                    let local_url = format!("http://localhost:5001/api/v0/cat?arg={}", guid);
+                    match timeout(Duration::from_secs(2), client.get(&local_url).send()).await {
+                        Ok(Ok(resp)) if resp.status().is_success() => {
+                            println!("Found {} locally", guid);
+                            encrypted_data = Some(resp.bytes().await?.to_vec());
+                            original_filename = "downloaded".to_string(); // Default for local
+                        }
+                        _ => {
+                            println!("CID {} not found locally, checking gateway", guid);
+                            // Step 2: Fallback to gateway
+                            let config_path = Some(get_config_path().expect("Failed to get config path"));
+                            let config = read_config(config_path).await?;
+                            let api_key = config.api_key.as_str();
+                            let response: serde_json::Value = fetch_guid_from_cid(&client, guid, api_key).await?;
+                            
+                            original_filename = response
+                                .get("filename")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "downloaded".to_string());
+
+                            // Fetch the actual file content from the gateway
+                            let gateway_url = format!("http://ipfs.sdrive.pro/ipfs/{}", guid);
+                            let response = client.get(&gateway_url).send().await?;
+                            if !response.status().is_success() {
+                                return Err(anyhow::anyhow!(
+                                    "Failed to download file from gateway: {}",
+                                    response.status()
+                                ));
+                            }
+                            encrypted_data = Some(response.bytes().await?.to_vec());
+                        }
+                    }
                 }
                 _ => unreachable!(),
             };
+
+            // Unwrap encrypted_data here since we know it's set
+            let encrypted_data = encrypted_data.expect("Encrypted data should be set by now");
 
             let output_path = args.output.unwrap_or_else(|| {
                 let mut path = PathBuf::from(&original_filename);
@@ -146,7 +173,7 @@ async fn main() -> Result<()> {
             });
 
             if let Some(key) = args.key {
-                // Dekrypter med per-fil-nøkkel uten å bruke keyring/master key
+                // Decrypt with per-file key
                 if encrypted_data.len() < 72 {
                     return Err(anyhow::anyhow!("Encrypted file too short."));
                 }
@@ -171,7 +198,7 @@ async fn main() -> Result<()> {
                     output_path.display()
                 );
             } else {
-                // Bruk master key fra keyring
+                // Use master key from keyring
                 let temp_file = std::env::temp_dir()
                     .join(format!("sdrive_download_{}.enc", rand::random::<u64>()));
                 fs::write(&temp_file, &encrypted_data).await?;

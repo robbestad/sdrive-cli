@@ -513,7 +513,10 @@ pub async fn pin_file(
     println!("🔍 HTTP Status (pinning): {}", pin_response.status());
 
     if pin_response.status().is_success() {
-        pin_remote_ipfs_file(&hash).await?;
+        let parent_folder = file_path.parent().unwrap_or(&file_path).to_path_buf();
+        let overwrite = true;
+        let unencrypted = true;
+        upload_file(file_path, parent_folder, unencrypted, overwrite).await?;
     } 
     
     if !pin_response.status().is_success() {
@@ -528,25 +531,6 @@ pub async fn pin_file(
 
     println!("✅ CID {} er nå pinned lokalt!", hash);
     Ok(hash)
-}
-
-async fn pin_remote_ipfs_file(cid: &str) -> Result<()> {
-    let url = format!(
-        "http://127.0.0.1:5001/api/v0/pin/remote/add?arg={}&service=sdrive",
-        cid
-    );
-    let client = Client::new();
-
-    println!("📌 Pinner CID på `sdrive`: {}", cid);
-    let response = client.post(&url).send().await?;
-
-    if response.status().is_success() {
-        println!("✅ CID pinned eksternt på `sdrive`!");
-    } else {
-        eprintln!("❌ Feil ved pinning av CID: {}", response.text().await?);
-    }
-    
-    Ok(())
 }
 
 #[async_recursion::async_recursion]
