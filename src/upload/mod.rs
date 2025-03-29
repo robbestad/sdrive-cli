@@ -430,6 +430,11 @@ pub async fn pin_file(
         .context("❌ Kunne ikke hente filnavn")?;
 
     println!("📌 Pinning lokalt i IPFS: {}", &file_name);
+
+    // Sjekk om filen eksisterer før vi prøver å lese den
+    if !file_path.exists() {
+        return Err(anyhow::anyhow!("❌ Filen finnes ikke: {:?}", file_path));
+    }
     println!("📂 Filstørrelse: {} bytes", file_path.metadata()?.len());
 
     // 🛡️ Krypter filen hvis ikke --unencrypted er satt
@@ -463,7 +468,7 @@ pub async fn pin_file(
     // 📡 Last opp til IPFS (lokalt)
     println!("📤 Starter opplasting til IPFS...");
     let form = reqwest::multipart::Form::new()
-        .part("file", reqwest::multipart::Part::bytes(file_content));
+        .part("file", reqwest::multipart::Part::bytes(file_content.clone()));
 
     let response = client.post(ipfs_api_url)
         .multipart(form)
@@ -471,9 +476,11 @@ pub async fn pin_file(
         .await
         .with_context(|| "❌ Feil ved opplasting til lokal IPFS")?;
 
+    println!("🔍 HTTP Status: {}", response.status());
+
     if !response.status().is_success() {
         let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
+        let error_text = response.text().await.unwrap_or_else(|_| "⚠️ Kunne ikke lese feilmelding".to_string());
         return Err(anyhow::anyhow!(
             "❌ IPFS opplasting feilet med status {}: {}",
             status,
@@ -481,8 +488,8 @@ pub async fn pin_file(
         ));
     }
 
-    let response_text = response.text().await?;
-    println!("📥 Mottok respons fra IPFS");
+    let response_text = response.text().await.unwrap_or_else(|_| "⚠️ Mottok ingen respons".to_string());
+    println!("📥 Mottok respons fra IPFS: {}", response_text);
 
     // 📍 Hent CID fra svaret
     let cid: serde_json::Value = serde_json::from_str(&response_text)
@@ -502,9 +509,11 @@ pub async fn pin_file(
         .await
         .with_context(|| "❌ Feil ved pinning av CID")?;
 
+    println!("🔍 HTTP Status (pinning): {}", pin_response.status());
+
     if !pin_response.status().is_success() {
         let status = pin_response.status();
-        let error_text = pin_response.text().await.unwrap_or_default();
+        let error_text = pin_response.text().await.unwrap_or_else(|_| "⚠️ Kunne ikke lese feilmelding".to_string());
         return Err(anyhow::anyhow!(
             "❌ Pinning feilet med status {}: {}",
             status,
@@ -515,6 +524,7 @@ pub async fn pin_file(
     println!("✅ CID {} er nå pinned lokalt!", hash);
     Ok(hash)
 }
+
 
 #[async_recursion::async_recursion]
 pub async fn handle_directory(
