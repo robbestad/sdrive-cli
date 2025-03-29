@@ -124,13 +124,22 @@ async fn main() -> Result<()> {
                         .ok_or_else(|| anyhow::anyhow!("Missing GUID in IPFS URL"))?;
 
                     // Step 1: Check local IPFS node
-                    let local_url = format!("http://localhost:5001/api/v0/cat?arg={}", guid);
-                    match timeout(Duration::from_secs(2), client.get(&local_url).send()).await {
-                        Ok(Ok(resp)) if resp.status().is_success() => {
-                            println!("Found {} locally", guid);
-                            encrypted_data = Some(resp.bytes().await?.to_vec());
-                            original_filename = "downloaded".to_string(); // Default for local
-                        }
+                    // Step 1: Check local IPFS node with POST
+                let local_url = "http://localhost:5002/api/v0/cat".to_string();
+                match timeout(
+                    Duration::from_secs(2),
+                    client
+                        .post(&local_url)
+                        .query(&[("arg", guid)])
+                        .send(),
+                )
+                .await
+                {
+                    Ok(Ok(resp)) if resp.status().is_success() => {
+                        println!("Found {} locally", guid);
+                        encrypted_data = Some(resp.bytes().await?.to_vec());
+                        original_filename = "downloaded".to_string(); // Default for local
+                    }
                         _ => {
                             println!("CID {} not found locally, checking gateway", guid);
                             // Step 2: Fallback to gateway

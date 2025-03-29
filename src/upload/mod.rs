@@ -423,7 +423,7 @@ pub async fn pin_file(
     unencrypted: bool,
 ) -> Result<String> {
     let client = Client::new();
-    let ipfs_api_url = "http://localhost:5001/api/v0/add"; // 📌 Bruker lokal IPFS instans
+    let ipfs_api_url = "http://localhost:5002/api/v0/add"; // 📌 Bruker lokal IPFS instans
 
     let file_name = file_path
         .file_name()
@@ -504,7 +504,7 @@ pub async fn pin_file(
 
     // 📌 Pin CID lokalt
     println!("📌 Pinner CID lokalt...");
-    let pin_url = format!("http://localhost:5001/api/v0/pin/add?arg={}", hash);
+    let pin_url = format!("http://localhost:5002/api/v0/pin/add?arg={}", hash);
     let pin_response = client.post(&pin_url)
         .send()
         .await
