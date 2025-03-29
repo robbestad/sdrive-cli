@@ -18,6 +18,7 @@ pub enum Commands {
     },
     Upload(UploadArgs),
     Sync(SyncArgs),
+    Server,
     Download(DownloadArgs),
     Decrypt(DecryptArgs),
 }

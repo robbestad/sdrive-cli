@@ -11,6 +11,7 @@ use sdrive::{
     upload::process_upload,
     file::fetch_guid_from_cid,
     secret::get_config_path,
+    server::start_server,
 };
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -43,6 +44,9 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
+        Commands::Server => {
+            start_server().await?;
+        }
         Commands::Config { command } => match command {
             ConfigSubcommands::Create {
                 config_path,
@@ -54,11 +58,9 @@ async fn main() -> Result<()> {
             } => {
                 prompt_and_save_config(
                     config_path,
-                    rpc_url,
                     sync_dir,
                     api_key,
                     user_guid,
-                    keypair_path,
                 )
                 .await?;
             }
@@ -126,8 +128,8 @@ async fn main() -> Result<()> {
 
                     let config_path = Some(get_config_path().expect("Failed to get config path"));
                     let config = read_config(config_path).await?;
-                    let api_key = config.api_key.as_deref().unwrap_or("");
-                    let response: serde_json::Value = fetch_guid_from_cid(&client, &guid, &api_key).await?;
+                    let api_key = config.api_key.as_str();
+                    let response: serde_json::Value = fetch_guid_from_cid(&client, &guid, api_key).await?;
                     let filename = response.get("filename")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())

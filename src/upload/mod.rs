@@ -1,6 +1,5 @@
-use crate::secret::{get_secure_value, get_value_from_env_or_config};
-use anyhow::Result;
-use base64::engine::general_purpose::STANDARD;
+use crate::secret::{get_value_from_env_or_config};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use indicatif::{ProgressBar, ProgressStyle};
 use mime_guess::from_path;
 use reqwest::Client;
@@ -11,15 +10,13 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use tokio::time::sleep;
 use tokio::time::Duration;
-
-use crate::config::read_config;
-use crate::encryption::encrypt_file; // Importer krypteringsfunksjonen
-use base64::Engine;
+use anyhow::{Result, Context};
+use std::path::PathBuf;
 use reqwest::multipart::{Form, Part};
 use serde::Serialize;
 use serde_json::json;
-use std::path::PathBuf;
-mod poll; // Deklarerer poll som en modul i samme katalog
+use crate::encryption::encrypt_file;
+mod poll;
 use poll::poll_file_status;
 
 const MAX_RETRIES: usize = 3;
@@ -226,7 +223,7 @@ pub async fn process_upload(
     overwrite: bool,
 ) -> Result<()> {
     if path.is_file() {
-        upload_file(path, parent_folder, config_path, unencrypted, overwrite).await?;
+        upload_file(path, parent_folder, unencrypted, overwrite).await?;
     } else if path.is_dir() {
         handle_directory(&path, &config_path, unencrypted, overwrite).await?;
     } else {
@@ -238,11 +235,9 @@ pub async fn process_upload(
 pub async fn upload_file(
     file_path: PathBuf,
     parent_folder: PathBuf,
-    config_path: String,
     unencrypted: bool,
     overwrite: bool,
 ) -> Result<()> {
-    let config = read_config(Some(config_path)).await?;
     let file_name = match file_path.file_name() {
         Some(name) => name.to_string_lossy().to_string(),
         None => panic!("Failed to get the file name."),
@@ -259,12 +254,7 @@ pub async fn upload_file(
 
     // 🆔 Hent bruker-GUID
     let user_guid = get_value_from_env_or_config("SDRIVE_USER_GUID", "user_guid", Some("sdrive")).await?;
-// 🔐 Hent krypteringsnøkkel (hvis filen skal krypteres)
-    let encryption_key = if unencrypted {
-        None
-    } else {
-        Some(get_secure_value("SDRIVE_ENCRYPTION_KEY", "sdrive", "master_key").await?)
-    };
+
 
     let is_valid = is_valid_api_key(&api_key).await?;
     if !is_valid {
@@ -297,7 +287,7 @@ pub async fn upload_file(
         let (_encrypted_key, rest) = encrypted_content.split_at(32);
         let (_key_nonce, rest) = rest.split_at(12);
         let (nonce, _ciphertext) = rest.split_at(12);
-        let nonce_b64 = STANDARD.encode(nonce);
+        let nonce_b64: String = STANDARD.encode(nonce);
         println!("🔑 To share this file securely, use this file key");
         println!("🔑 {}", STANDARD.encode(per_file_key));
         (encrypted_content, nonce_b64, Some(per_file_key))
@@ -427,6 +417,79 @@ pub async fn upload_file(
     Ok(())
 }
 
+pub async fn pin_file(
+    file_path: PathBuf,
+    unencrypted: bool,
+) -> Result<String> {
+    let client = Client::new();
+    let ipfs_api_url = "http://localhost:5001/api/v0/add"; // 📌 Bruker lokal IPFS instans
+
+    let file_name = file_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .context("❌ Kunne ikke hente filnavn")?;
+
+    println!("📌 Pinning lokalt i IPFS: {}", &file_name);
+
+    // 🛡️ Krypter filen hvis ikke --unencrypted er satt
+    let (file_content, nonce_b64, _per_file_key_option) = if unencrypted {
+        let content = tokio::fs::read(&file_path)
+            .await
+            .with_context(|| format!("❌ Kunne ikke lese filen: {:?}", file_path))?;
+        (content, "".to_string(), None)
+    } else {
+        let (encrypted_content, per_file_key) = encrypt_file(&file_path).await?;
+        let encrypted_file_size = encrypted_content.len();
+        if encrypted_file_size < 56 {
+            return Err(anyhow::anyhow!(
+                "🔐 Kryptert data er for kort: {} bytes",
+                encrypted_file_size
+            ));
+        }
+        // Ekstraher nonce (avhenger av krypteringsmetode)
+        let (_encrypted_key, rest) = encrypted_content.split_at(32);
+        let (_key_nonce, rest) = rest.split_at(12);
+        let (nonce, _ciphertext) = rest.split_at(12);
+        let nonce_b64 = STANDARD.encode(nonce);
+        println!("🔑 Del denne filen sikkert med denne nøkkelen: {}", STANDARD.encode(per_file_key));
+        (encrypted_content, nonce_b64, Some(per_file_key))
+    };
+
+    // 📡 Last opp til IPFS (lokalt)
+    let form = reqwest::multipart::Form::new()
+        .part("file", reqwest::multipart::Part::bytes(file_content));
+
+    let response = client.post(ipfs_api_url)
+        .multipart(form)
+        .send()
+        .await
+        .context("❌ Feil ved opplasting til lokal IPFS")?;
+
+    let response_text = response.text().await?;
+
+    // 📍 Hent CID fra svaret
+    let cid: serde_json::Value = serde_json::from_str(&response_text)?;
+    let hash = cid["Hash"].as_str().context("❌ CID mangler i responsen")?.to_string();
+
+    println!("✅ Fil pinned i lokal IPFS-node! CID: {}", hash);
+
+    // 📌 Pin CID lokalt
+    let pin_url = format!("http://localhost:5001/api/v0/pin/add?arg={}", hash);
+    let pin_response = client.post(&pin_url)
+        .send()
+        .await
+        .context("❌ Feil ved pinning av CID")?;
+
+    if pin_response.status().is_success() {
+        println!("📌 CID {} er nå pinned lokalt!", hash);
+    } else {
+        let err_msg = pin_response.text().await?;
+        eprintln!("❌ Feil ved pinning: {}", err_msg);
+    }
+
+    Ok(hash)
+}
+
 #[async_recursion::async_recursion]
 pub async fn handle_directory(
     dir_path: &Path,
@@ -441,7 +504,6 @@ pub async fn handle_directory(
             upload_file(
                 entry_path.clone(),
                 parent_folder.to_path_buf(),
-                config_path.to_string(),
                 unencrypted,
                 overwrite,
             )

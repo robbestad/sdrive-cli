@@ -42,12 +42,13 @@ pub async fn get_value_from_env_or_config(env_key: &str, config_key: &str, keyri
     // 📄 2️⃣ Hvis ikke, prøv å lese fra `config.toml`
     let config_path = get_config_path().expect("Failed to get config path");
     let config = read_config(Some(config_path)).await?;
-    if let Some(value) = match config_key {
+    let value = match config_key {
         "api_key" => config.api_key,
         "user_guid" => config.user_guid,
         "encryption_key" => config.encryption_key,
-        _ => None,
-    } {
+        _ => String::new(),
+    };
+    if !value.is_empty() {
         return Ok(value);
     }
 

@@ -5,13 +5,14 @@ use tokio::time::sleep;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use toml;
-use crate::upload::upload_file;
+use crate::upload::pin_file;
 use std::collections::HashSet;
 use anyhow::{Result, Context};
 use std::sync::Arc;
 use std::fmt;
 use keyring::Entry;
 use std::env;
+use crate::config::read_config;
 
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -65,9 +66,6 @@ async fn load_config(path: &str) -> Result<Config> {
         config.user_guid = user_guid;
     }
 
-    // 🔐 Henter krypteringsnøkkel fra env eller keyring
-    let encryption_key = load_encryption_key().await?;
-    
     println!("✅ Config loaded successfully.");
     println!("🔑 Encryption key loaded successfully.");
 
@@ -94,16 +92,10 @@ pub async fn watch_directory(sync_dir: &str, uploaded_files: Arc<Mutex<HashSet<P
                         println!("📂 New file detected: {:?}", file_path);
 
                         let unencrypted = false;
-                        let overwrite = false;
-                        let parent_folder = sync_path.clone();
-                        let config_path = PathBuf::from("/config/config.toml");
 
-                        match upload_file(
+                        match pin_file(
                             file_path.clone(),
-                            parent_folder,
-                            config_path.to_string_lossy().to_string(),
-                            unencrypted,
-                            overwrite
+                            unencrypted
                         ).await {
                             Ok(_) => {
                                 println!("✅ Successfully uploaded: {:?}", file_path);
@@ -127,8 +119,16 @@ pub async fn watch_directory(sync_dir: &str, uploaded_files: Arc<Mutex<HashSet<P
 
 // 🚀 Starter serveren og begynner å overvåke filer
 pub async fn start_server() -> Result<()> {
-    let config = load_config("/config/config.toml").await?;
     println!("🚀 Starting S-Node in server mode...");
+
+    // Henter config, automatisk fra miljøvariabler, fallback til config.toml
+    let config = read_config(None).await?;
+
+    if config.api_key.is_empty() || config.user_guid.is_empty() || config.encryption_key.is_empty() {
+        anyhow::bail!("❌ Missing required configuration. Ensure API_KEY, USER_GUID, and ENCRYPTION_KEY are set.");
+    }
+
+    println!("✅ Config loaded");
 
     let uploaded_files = Arc::new(Mutex::new(HashSet::new()));
 
