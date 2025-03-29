@@ -430,19 +430,24 @@ pub async fn pin_file(
         .context("❌ Kunne ikke hente filnavn")?;
 
     println!("📌 Pinning lokalt i IPFS: {}", &file_name);
+    println!("📂 Filstørrelse: {} bytes", file_path.metadata()?.len());
 
     // 🛡️ Krypter filen hvis ikke --unencrypted er satt
     let (file_content, nonce_b64, _per_file_key_option) = if unencrypted {
         let content = tokio::fs::read(&file_path)
             .await
             .with_context(|| format!("❌ Kunne ikke lese filen: {:?}", file_path))?;
+        println!("✅ Fil lest (ukryptert): {} bytes", content.len());
         (content, "".to_string(), None)
     } else {
+        println!("🔐 Starter kryptering av fil...");
         let (encrypted_content, per_file_key) = encrypt_file(&file_path).await?;
+        println!("✅ Fil kryptert: {} bytes", encrypted_content.len());
+        
         let encrypted_file_size = encrypted_content.len();
         if encrypted_file_size < 56 {
             return Err(anyhow::anyhow!(
-                "🔐 Kryptert data er for kort: {} bytes",
+                "🔐 Kryptert data er for kort: {} bytes (minimum 56 bytes kreves)",
                 encrypted_file_size
             ));
         }
@@ -456,6 +461,7 @@ pub async fn pin_file(
     };
 
     // 📡 Last opp til IPFS (lokalt)
+    println!("📤 Starter opplasting til IPFS...");
     let form = reqwest::multipart::Form::new()
         .part("file", reqwest::multipart::Part::bytes(file_content));
 
@@ -463,30 +469,50 @@ pub async fn pin_file(
         .multipart(form)
         .send()
         .await
-        .context("❌ Feil ved opplasting til lokal IPFS")?;
+        .with_context(|| "❌ Feil ved opplasting til lokal IPFS")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "❌ IPFS opplasting feilet med status {}: {}",
+            status,
+            error_text
+        ));
+    }
 
     let response_text = response.text().await?;
+    println!("📥 Mottok respons fra IPFS");
 
     // 📍 Hent CID fra svaret
-    let cid: serde_json::Value = serde_json::from_str(&response_text)?;
-    let hash = cid["Hash"].as_str().context("❌ CID mangler i responsen")?.to_string();
+    let cid: serde_json::Value = serde_json::from_str(&response_text)
+        .with_context(|| format!("❌ Kunne ikke parse IPFS respons: {}", response_text))?;
+    
+    let hash = cid["Hash"].as_str()
+        .context("❌ CID mangler i responsen")?
+        .to_string();
 
     println!("✅ Fil pinned i lokal IPFS-node! CID: {}", hash);
 
     // 📌 Pin CID lokalt
+    println!("📌 Pinner CID lokalt...");
     let pin_url = format!("http://localhost:5001/api/v0/pin/add?arg={}", hash);
     let pin_response = client.post(&pin_url)
         .send()
         .await
-        .context("❌ Feil ved pinning av CID")?;
+        .with_context(|| "❌ Feil ved pinning av CID")?;
 
-    if pin_response.status().is_success() {
-        println!("📌 CID {} er nå pinned lokalt!", hash);
-    } else {
-        let err_msg = pin_response.text().await?;
-        eprintln!("❌ Feil ved pinning: {}", err_msg);
+    if !pin_response.status().is_success() {
+        let status = pin_response.status();
+        let error_text = pin_response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "❌ Pinning feilet med status {}: {}",
+            status,
+            error_text
+        ));
     }
 
+    println!("✅ CID {} er nå pinned lokalt!", hash);
     Ok(hash)
 }
 
