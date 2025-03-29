@@ -511,6 +511,10 @@ pub async fn pin_file(
 
     println!("🔍 HTTP Status (pinning): {}", pin_response.status());
 
+    if pin_response.status() == reqwest::StatusCode::ACCEPTED {
+        pin_remote_ipfs_file(&hash).await?;
+    }
+
     if !pin_response.status().is_success() {
         let status = pin_response.status();
         let error_text = pin_response.text().await.unwrap_or_else(|_| "⚠️ Kunne ikke lese feilmelding".to_string());
@@ -525,6 +529,24 @@ pub async fn pin_file(
     Ok(hash)
 }
 
+async fn pin_remote_ipfs_file(cid: &str) -> Result<(), Box<dyn Error>> {
+    let url = format!(
+        "http://127.0.0.1:5001/api/v0/pin/remote/add?arg={}&service=sdrive",
+        cid
+    );
+    let client = Client::new();
+
+    println!("📌 Pinner CID på `sdrive`: {}", cid);
+    let response = client.post(&url).send().await?;
+
+    if response.status().is_success() {
+        println!("✅ CID pinned eksternt på `sdrive`!");
+    } else {
+        eprintln!("❌ Feil ved pinning av CID: {}", response.text().await?);
+    }
+    
+    Ok(())
+}
 
 #[async_recursion::async_recursion]
 pub async fn handle_directory(
