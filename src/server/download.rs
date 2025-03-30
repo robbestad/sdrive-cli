@@ -9,6 +9,7 @@ use crate::server::Config;
 use std::path::PathBuf;
 use tokio::fs;
 use std::sync::Arc;
+use tokio::time::{timeout, Duration};
 
 pub struct Args {
     pub output: Option<PathBuf>,
@@ -28,11 +29,12 @@ pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc
     println!("🔑 Sync_dir: {}", config.sync_dir);
 
     let local_url = "http://localhost:5002/api/v0/cat".to_string();
-    let response = client
+    let response = timeout(Duration::from_secs(10), client
         .post(&local_url)
         .query(&[("arg", cid)])
-        .send()
-        .await?;
+        .send())
+        .await
+        .map_err(|_| anyhow::anyhow!("Timeout waiting for IPFS response"))??;
 
     if !response.status().is_success() {
         return Err(anyhow::anyhow!(
@@ -41,7 +43,7 @@ pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc
         ));
     }
 
-    let encrypted_data = response.bytes().await?.to_vec();
+    let encrypted_data = response.bytes().await?;
     println!("📏 Encrypted data length: {}", encrypted_data.len());
 
     let base_dir = PathBuf::from(&config.sync_dir);
@@ -104,7 +106,9 @@ pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc
             if let Some(parent) = final_output_path.parent() {
                 fs::create_dir_all(parent).await?;
             }
-            let decrypted: DecryptedData<Vec<u8>> = decrypt_file(&temp_file, Some(&final_output_path)).await?;
+            let decrypted: DecryptedData<Vec<u8>> = timeout(Duration::from_secs(10), decrypt_file(&temp_file, Some(&final_output_path)))
+                .await
+                .map_err(|_| anyhow::anyhow!("Timeout waiting for master key decryption"))??;
             fs::remove_file(&temp_file).await?;
 
             match decrypted {
@@ -121,7 +125,7 @@ pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc
         }
         fs::write(&final_output_path, &encrypted_data).await?;
         println!("✅ File downloaded to {}", final_output_path.display());
-        encrypted_data
+        encrypted_data.to_vec()
     };
 
     Ok(data)
