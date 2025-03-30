@@ -15,7 +15,7 @@ pub struct ListFilesQuery {
 struct FileEntry {
     cid: String,
     size: u64,
-    modified: String,
+    modified: i64,
     filename: String,
     filepath: String,
 }
@@ -26,10 +26,9 @@ fn map_row(row: &rusqlite::Row) -> Result<FileEntry, rusqlite::Error> {
         filename: row.get(1)?,
         filepath: row.get(2)?,
         size: row.get(3)?,
-        modified: row.get(4)?,
+        modified: row.get(4)?, // nå som i64
     })
 }
-
 pub async fn list_files_handler(
     query: web::Query<ListFilesQuery>,
     state: web::Data<AppState>,
