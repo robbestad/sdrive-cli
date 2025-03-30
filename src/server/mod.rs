@@ -17,6 +17,8 @@ use ignore::gitignore::GitignoreBuilder;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
+mod listfiles;
+use listfiles::list_files_handler;
 
 #[derive(Serialize)]
 struct MetadataPayload {
@@ -138,10 +140,16 @@ pub async fn watch_directory(
                                 println!("✅ Successfully uploaded: {:?}", file_path);
                                 uploaded_files_guard.insert(file_path.clone());
                                 let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
+                                let size = file_path.metadata().unwrap().len();
+                                let modified = file_path.metadata().unwrap().modified().unwrap()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs()
+                                    .to_string();
 
                                 db_conn.execute(
-                                    "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, file_key) VALUES (?, ?, ?, ?)",
-                                    params![cid, filename, filepath_str, file_key],
+                                    "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, file_key, size, modified) VALUES (?, ?, ?, ?, ?, ?)",
+                                    params![cid, filename, filepath_str, file_key, size, modified],
                                 ).unwrap();
 
                                 if let Err(e) = store_metadata_global(client, cid.clone(), filename.clone(), filepath_str.clone()).await {
@@ -242,7 +250,9 @@ pub async fn start_server() -> Result<()> {
             cid TEXT PRIMARY KEY,
             filename TEXT NOT NULL,
             filepath TEXT UNIQUE NOT NULL,
-            file_key TEXT
+            file_key TEXT,
+            size INTEGER,
+            modified INTEGER
         )",
         [],
     )?;
@@ -285,6 +295,8 @@ pub async fn start_server() -> Result<()> {
                 ))
             }))
             .route("/download/{cid}", web::get().to(download_handler))
+            .route("/listfiles", web::get().to(list_files_handler)) 
+
     })
     .bind("0.0.0.0:8081")?
     .run();
