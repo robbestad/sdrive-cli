@@ -13,16 +13,16 @@ use tokio::sync::Mutex;
 mod download;
 use actix_governor::{Governor, GovernorConfigBuilder};
 use download::{download_file, Args};
-use ignore::gitignore::GitignoreBuilder; // Add rate limiting
-use rusqlite::{params, Connection, Error};
-use serde::{Deserialize, Serialize};
+use ignore::gitignore::GitignoreBuilder;
+use rusqlite::{params, Connection};
+use serde::Serialize;
 use std::collections::HashMap;
 
 #[derive(Serialize)]
 struct MetadataPayload {
     cid: String,
     filename: String,
-    filepath: String, // Added filepath
+    filepath: String,
 }
 
 #[derive(Clone)]
@@ -49,17 +49,8 @@ impl fmt::Display for Config {
     }
 }
 
-async fn store_metadata_global(
-    client: &Client,
-    cid: String,
-    filename: String,
-    filepath: String,
-) -> Result<()> {
-    let payload = MetadataPayload {
-        cid,
-        filename,
-        filepath,
-    };
+async fn store_metadata_global(client: &Client, cid: String, filename: String, filepath: String) -> Result<()> {
+    let payload = MetadataPayload { cid, filename, filepath };
     client
         .post("https://backend.sdrive.app/metadatastore")
         .json(&payload)
@@ -113,16 +104,11 @@ pub async fn watch_directory(
                             continue;
                         }
 
-                        if gitignore
-                            .matched(&file_path, file_path.is_dir())
-                            .is_ignore()
-                        {
+                        if gitignore.matched(&file_path, file_path.is_dir()).is_ignore() {
                             continue;
                         }
 
-                        if file_path.is_dir()
-                            || file_path.extension().unwrap_or_default() == ".DS_Store"
-                        {
+                        if file_path.is_dir() || file_path.extension().unwrap_or_default() == ".DS_Store" {
                             continue;
                         }
 
@@ -151,31 +137,20 @@ pub async fn watch_directory(
                             Ok((cid, file_key)) => {
                                 println!("✅ Successfully uploaded: {:?}", file_path);
                                 uploaded_files_guard.insert(file_path.clone());
-                                let filename =
-                                    file_path.file_name().unwrap().to_string_lossy().to_string();
+                                let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
 
-                                let _ = db_conn.execute(
+                                db_conn.execute(
                                     "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, file_key) VALUES (?, ?, ?, ?)",
                                     params![cid, filename, filepath_str, file_key],
                                 ).unwrap();
 
-                                if let Err(e) = store_metadata_global(
-                                    client,
-                                    cid.clone(),
-                                    filename.clone(),
-                                    filepath_str.clone(),
-                                )
-                                .await
-                                {
+                                if let Err(e) = store_metadata_global(client, cid.clone(), filename.clone(), filepath_str.clone()).await {
                                     eprintln!("⚠️ Failed to store metadata globally: {}", e);
                                 }
 
                                 let mut pinned_cids_guard = pinned_cids.lock().await;
                                 pinned_cids_guard.insert(cid.clone(), filename.clone());
-                                println!(
-                                    "✅ Added CID to cache and DB: {} with name {}",
-                                    cid, filename
-                                );
+                                println!("✅ Added CID to cache and DB: {} with name {}", cid, filename);
                             }
                             Err(e) => {
                                 eprintln!("❌ Failed to upload file {:?}: {}", file_path, e);
@@ -200,8 +175,7 @@ async fn download_handler(
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, actix_web::Error> {
     if cid.is_empty() {
-        return Ok(HttpResponse::BadRequest()
-            .body("❌ CID er påkrevd. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1"));
+        return Ok(HttpResponse::BadRequest().body("❌ CID er påkrevd. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1"));
     }
 
     let pinned_cids = state.pinned_cids.lock().await;
@@ -209,28 +183,23 @@ async fn download_handler(
     drop(pinned_cids);
 
     let db_conn = state.db_conn.lock().await;
-    let mut stmt = db_conn
-        .prepare("SELECT filename, file_key FROM pinned_files WHERE cid = ?")
-        .unwrap();
+    let mut stmt = db_conn.prepare("SELECT filename, file_key FROM pinned_files WHERE cid = ?").unwrap();
     let (filename, file_key) = match stmt.query_row(params![cid.to_string()], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
     }) {
-        Ok((filename, file_key)) => (filename, Some(file_key)),
-        Err(_) => {
-            return Ok(
-                HttpResponse::NotFound().body(format!("❌ CID {} is not pinned locally", cid))
-            )
-        }
+        Ok((filename, file_key)) => (filename, file_key),
+        Err(_) => return Ok(HttpResponse::NotFound().body(format!("❌ CID {} is not pinned locally", cid))),
     };
-   
-    let key = query.key.clone().unwrap_or_else(|| file_key.unwrap_or_default());
 
-    println!("🔍 Using key (from query or DB): {:?}", key);
+    let key = query.key.clone(); // Use query key if provided, else None
+
     println!("🔍 Received key in handler: {:?}", query.key);
+    println!("🔍 DB key: {:?}", file_key);
+    println!("🔍 Using key (from query or DB): {:?}", key);
 
     let args = Args {
         output: None,
-        key: Some(key),
+        key,
         filename: cid.to_string(),
         filepath: query.filepath.clone().unwrap_or_default(),
     };
@@ -244,10 +213,7 @@ async fn download_handler(
             };
             Ok(HttpResponse::Ok()
                 .content_type("application/octet-stream")
-                .append_header((
-                    "Content-Disposition",
-                    format!("attachment; filename=\"{}\"", filename),
-                ))
+                .append_header(("Content-Disposition", format!("attachment; filename=\"{}\"", filename)))
                 .body(data))
         }
         Err(e) => Ok(HttpResponse::NotFound().body(format!("❌ Nedlasting feilet: {}", e))),
@@ -258,8 +224,7 @@ pub async fn start_server() -> Result<()> {
     println!("🚀 Starting S-Node in server mode...");
     let config = read_config(None).await?;
 
-    if config.api_key.is_empty() || config.user_guid.is_empty() || config.encryption_key.is_empty()
-    {
+    if config.api_key.is_empty() || config.user_guid.is_empty() || config.encryption_key.is_empty() {
         anyhow::bail!("❌ Missing required configuration. Ensure SDRIVE_API_KEY, SDRIVE_USER_GUID, and SDRIVE_ENCRYPTION_KEY are set or provided in the config file.");
     }
 
@@ -297,14 +262,7 @@ pub async fn start_server() -> Result<()> {
         let pinned_cids = pinned_cids.clone();
         let client = app_state.client.clone();
         async move {
-            watch_directory(
-                &config.sync_dir,
-                uploaded_files,
-                pinned_cids,
-                &db_conn,
-                &client,
-            )
-            .await;
+            watch_directory(&config.sync_dir, uploaded_files, pinned_cids, &db_conn, &client).await;
         }
     });
 
