@@ -13,14 +13,24 @@ use tokio::sync::Mutex;
 mod download;
 use actix_governor::{Governor, GovernorConfigBuilder};
 use download::{download_file, Args};
-use ignore::gitignore::{Gitignore, GitignoreBuilder}; // Add rate limiting
+use ignore::gitignore::GitignoreBuilder; // Add rate limiting
+use rusqlite::{params, Connection, Error};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-// App state struct to hold both Client and Config
+#[derive(Serialize)]
+struct MetadataPayload {
+    cid: String,
+    filename: String,
+    filepath: String, // Added filepath
+}
+
 #[derive(Clone)]
 struct AppState {
     client: Client,
     config: Arc<Config>,
-    pinned_cids: Arc<Mutex<HashSet<String>>>, // Cache of pinned CIDs
+    db_conn: Arc<Mutex<Connection>>,
+    pinned_cids: Arc<Mutex<HashMap<String, String>>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -40,15 +50,38 @@ impl fmt::Display for Config {
     }
 }
 
+async fn store_metadata_global(
+    client: &Client,
+    cid: String,
+    filename: String,
+    filepath: String,
+) -> Result<()> {
+    let payload = MetadataPayload {
+        cid,
+        filename,
+        filepath,
+    };
+    client
+        .post("https://backend.sdrive.app/metadatastore")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to store metadata globally: {}", e))?;
+    println!("✅ Stored metadata globally for CID: {}", payload.cid);
+    Ok(())
+}
+
 // 🚀 Overvåker en mappe og laster opp filer automatisk
 pub async fn watch_directory(
     sync_dir: &str,
     uploaded_files: Arc<Mutex<HashSet<PathBuf>>>,
-    pinned_cids: Arc<Mutex<HashSet<String>>>,
+    pinned_cids: Arc<Mutex<HashMap<String, String>>>,
+    db_conn: &Arc<Mutex<Connection>>,
+    client: &Client,
 ) {
     let sync_path = PathBuf::from(sync_dir);
     let ignore_file = sync_path.join(".sdrive-ignore");
-    // Load .sdrive-ignore
+
     let mut gitignore_builder = GitignoreBuilder::new(&sync_path);
     if ignore_file.exists() {
         let contents = fs::read_to_string(&ignore_file).await.unwrap_or_default();
@@ -60,7 +93,6 @@ pub async fn watch_directory(
             }
         }
     } else {
-        // Default ignores if no .sdrive-ignore exists
         gitignore_builder
             .add_line(None, ".DS_Store")
             .expect("Failed to add default ignore");
@@ -81,12 +113,11 @@ pub async fn watch_directory(
                         if uploaded_files_guard.contains(&file_path) {
                             continue;
                         }
-                        // Check against .sdrive-ignore
+
                         if gitignore
                             .matched(&file_path, file_path.is_dir())
                             .is_ignore()
                         {
-                            println!("📂 Ignored file: {:?}", file_path);
                             continue;
                         }
 
@@ -96,22 +127,62 @@ pub async fn watch_directory(
                             continue;
                         }
 
+                        let db_conn = db_conn.lock().await;
+                        let filepath_str = file_path.to_string_lossy().to_string();
+                        let exists = db_conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM pinned_files WHERE filepath = ?",
+                                params![filepath_str],
+                                |row| row.get::<_, i32>(0),
+                            )
+                            .map(|count| count > 0)
+                            .unwrap_or(false);
+
+                        if exists {
+                            println!("📂 Ignored duplicate file: {:?}", file_path);
+                            uploaded_files_guard.insert(file_path.clone());
+                            continue;
+                        }
+
                         println!("📂 New file detected: {:?}", file_path);
 
                         let unencrypted = false;
 
                         match pin_file(file_path.clone(), unencrypted).await {
-                            Ok(cid) => {
+                            Ok((cid, file_key)) => {
                                 println!("✅ Successfully uploaded: {:?}", file_path);
-                                uploaded_files_guard.insert(file_path);
+                                uploaded_files_guard.insert(file_path.clone());
+                                let filename =
+                                    file_path.file_name().unwrap().to_string_lossy().to_string();
+
+                                let _ = db_conn.execute(
+                                    "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, file_key) VALUES (?, ?, ?, ?)",
+                                    params![cid, filename, filepath_str, file_key],
+                                ).unwrap();
+
+                                if let Err(e) = store_metadata_global(
+                                    client,
+                                    cid.clone(),
+                                    filename.clone(),
+                                    filepath_str.clone(),
+                                )
+                                .await
+                                {
+                                    eprintln!("⚠️ Failed to store metadata globally: {}", e);
+                                }
+
                                 let mut pinned_cids_guard = pinned_cids.lock().await;
-                                pinned_cids_guard.insert(cid.clone());
-                                println!("✅ Added CID to cache: {}", cid);
+                                pinned_cids_guard.insert(cid.clone(), filename.clone());
+                                println!(
+                                    "✅ Added CID to cache and DB: {} with name {}",
+                                    cid, filename
+                                );
                             }
                             Err(e) => {
                                 eprintln!("❌ Failed to upload file {:?}: {}", file_path, e);
                             }
                         }
+                        drop(db_conn);
                     }
                 }
             }
@@ -134,25 +205,41 @@ async fn download_handler(
             .body("❌ CID er påkrevd. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1"));
     }
 
-    // Fast CID check from cache
     let pinned_cids = state.pinned_cids.lock().await;
-    if !pinned_cids.contains(&cid.to_string()) {
-        return Ok(HttpResponse::NotFound().body(format!("❌ CID {} is not pinned locally", cid)));
-    }
-    drop(pinned_cids); // Release lock early
+    let filename_from_cache = pinned_cids.get(&cid.to_string()).cloned();
+    drop(pinned_cids);
+
+    let db_conn = state.db_conn.lock().await;
+    let mut stmt = db_conn
+        .prepare("SELECT filename, file_key FROM pinned_files WHERE cid = ?")
+        .unwrap();
+    let (filename, file_key) = match stmt.query_row(params![cid.to_string()], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
+        Ok((filename, file_key)) => (filename, Some(file_key)),
+        Err(_) => {
+            return Ok(
+                HttpResponse::NotFound().body(format!("❌ CID {} is not pinned locally", cid))
+            )
+        }
+    };
 
     let is_encrypted = query.encrypted.unwrap_or(false);
-    let key = query.encryption_key.clone();
+    let key = if is_encrypted {
+        query.encryption_key.clone().or(file_key) // Use DB key if query key is None
+    } else {
+        None
+    };
 
-    println!("🔍 Received key in handler: {:?}", key);
+    println!("🔍 Received key in handler: {:?}", query.encryption_key);
+    println!("🔍 Using key (from query or DB): {:?}", key);
 
     if is_encrypted && key.is_none() {
-        println!("⚠️ No encryption key provided; using master key from keyring.");
+        println!("⚠️ No encryption key provided or found in DB; using master key from keyring.");
     }
 
     let args = Args {
         output: None,
-        encrypted: is_encrypted,
         key,
         filename: cid.to_string(),
         filepath: query.filepath.clone().unwrap_or_default(),
@@ -163,7 +250,7 @@ async fn download_handler(
             let filename = if !args.filepath.is_empty() {
                 args.filepath.clone()
             } else {
-                cid.to_string()
+                filename
             };
             Ok(HttpResponse::Ok()
                 .content_type("application/octet-stream")
@@ -189,26 +276,50 @@ pub async fn start_server() -> Result<()> {
     println!("✅ Config loaded");
 
     let uploaded_files = Arc::new(Mutex::new(HashSet::new()));
-    let pinned_cids = Arc::new(Mutex::new(HashSet::new()));
+    let pinned_cids = Arc::new(Mutex::new(HashMap::new()));
     let client = Client::new();
+
+    let db_path = format!("{}/.sdrive.db", config.sync_dir);
+    let db_conn = Connection::open(&db_path)
+        .map_err(|e| anyhow::anyhow!("Failed to open SQLite database: {}", e))?;
+    db_conn.execute(
+        "CREATE TABLE IF NOT EXISTS pinned_files (
+            cid TEXT PRIMARY KEY,
+            filename TEXT NOT NULL,
+            filepath TEXT UNIQUE NOT NULL,
+            file_key TEXT
+        )",
+        [],
+    )?;
+    let db_conn = Arc::new(Mutex::new(db_conn));
+
     let app_state = AppState {
         client,
         config: Arc::new(config.clone()),
+        db_conn,
         pinned_cids: pinned_cids.clone(),
     };
 
     let watcher_handle = tokio::spawn({
         let config = app_state.config.clone();
         let uploaded_files = uploaded_files.clone();
+        let db_conn = app_state.db_conn.clone();
         let pinned_cids = pinned_cids.clone();
+        let client = app_state.client.clone();
         async move {
-            watch_directory(&config.sync_dir, uploaded_files, pinned_cids).await;
+            watch_directory(
+                &config.sync_dir,
+                uploaded_files,
+                pinned_cids,
+                &db_conn,
+                &client,
+            )
+            .await;
         }
     });
 
-    // Rate limiting: 100 requests per minute per IP
     let governor_conf = GovernorConfigBuilder::default()
-        .seconds_per_request(60) // 100 requests per minute
+        .seconds_per_request(60)
         .burst_size(100)
         .finish()
         .unwrap();
@@ -217,11 +328,11 @@ pub async fn start_server() -> Result<()> {
     let server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(app_state.clone()))
-            .wrap(Governor::new(&governor_conf)) // Add rate limiting
-            .wrap(Logger::default()) // Add logging for debugging
+            .wrap(Governor::new(&governor_conf))
+            .wrap(Logger::default())
             .app_data(web::QueryConfig::default().error_handler(|err, _| {
                 actix_web::error::ErrorBadRequest(format!(
-                    "❌ Ugyldig format for query-parametre. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1?encrypted=true&encryption_key=din_nøkkel\n\nTeknisk detalj: {}",
+                    "❌ Ugyldig format for query-parametre. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1?encryption_key=optional_key\n\nTechnical details: {}",
                     err
                 ))
             }))

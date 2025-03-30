@@ -424,7 +424,7 @@ pub async fn upload_file(
     Ok(())
 }
 
-pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<String> {
+pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<(String, String)> {
     let client = Client::new();
     let ipfs_api_url = "http://localhost:5002/api/v0/add"; // 📌 Bruker lokal IPFS instans
 
@@ -433,6 +433,7 @@ pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<String> {
         .map(|name| name.to_string_lossy().to_string())
         .context("❌ Kunne ikke hente filnavn")?;
 
+    let mut file_key = "".to_string();
     println!("📌 Pinning lokalt i IPFS: {}", &file_name);
 
     // Sjekk om filen eksisterer før vi prøver å lese den
@@ -442,7 +443,7 @@ pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<String> {
     println!("📂 Filstørrelse: {} bytes", file_path.metadata()?.len());
 
     // 🛡️ Krypter filen hvis ikke --unencrypted er satt
-    let (file_content, _nonce_b64, _per_file_key_option) = if unencrypted {
+    let (file_content, _nonce_b64, per_file_key_option) = if unencrypted {
         let content = tokio::fs::read(&file_path)
             .await
             .with_context(|| format!("❌ Kunne ikke lese filen: {:?}", file_path))?;
@@ -460,14 +461,14 @@ pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<String> {
                 encrypted_file_size
             ));
         }
-        // Ekstraher nonce (avhenger av krypteringsmetode)
         let (_encrypted_key, rest) = encrypted_content.split_at(32);
         let (_key_nonce, rest) = rest.split_at(12);
         let (nonce, _ciphertext) = rest.split_at(12);
         let nonce_b64 = STANDARD.encode(nonce);
+        file_key = STANDARD.encode(&per_file_key);
         println!(
             "🔑 Del denne filen sikkert med denne nøkkelen: {}",
-            STANDARD.encode(per_file_key)
+            file_key
         );
         (encrypted_content, nonce_b64, Some(per_file_key))
     };
@@ -551,7 +552,7 @@ pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<String> {
     }
 
     println!("✅ CID {} er nå pinned lokalt!", hash);
-    Ok(hash)
+    Ok((hash, file_key))
 }
 
 #[async_recursion::async_recursion]

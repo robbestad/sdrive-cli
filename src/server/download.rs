@@ -14,7 +14,6 @@ use tokio::time::{timeout, Duration};
 pub struct Args {
     pub output: Option<PathBuf>,
     pub key: Option<String>,
-    pub encrypted: bool,
     pub filename: String,
     pub filepath: String,
 }
@@ -26,7 +25,6 @@ pub async fn download_file(
     config: &Arc<Config>,
 ) -> Result<Vec<u8>> {
     println!("🔑 CID: {}", cid);
-    println!("🔑 Encrypted: {}", args.encrypted);
     println!("🔑 Encryption key: {:?}", args.key);
     println!("🔑 Filename: {}", args.filename);
     println!("🔑 Filepath: {}", args.filepath);
@@ -63,8 +61,8 @@ pub async fn download_file(
     };
 
     let final_output_path = args.output.clone().unwrap_or(output_path);
-
-    let data = if args.encrypted {
+    let key = args.key.clone().unwrap_or("".to_string());
+    let data = if !key.is_empty() {
         if let Some(key) = &args.key {
             if encrypted_data.len() < 72 {
                 return Err(anyhow::anyhow!(
