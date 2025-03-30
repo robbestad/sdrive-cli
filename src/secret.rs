@@ -1,10 +1,14 @@
+use crate::config::read_config;
+use anyhow::{Context, Result};
 use keyring::Entry;
 use std::env;
-use anyhow::{Result, Context};
-use crate::config::read_config;
 
 /// 🔑 Henter en sikker verdi fra enten miljøvariabler eller `keyring`
-pub async fn get_secure_value(env_key: &str, keyring_service: &str, keyring_user: &str) -> Result<String> {
+pub async fn get_secure_value(
+    env_key: &str,
+    keyring_service: &str,
+    keyring_user: &str,
+) -> Result<String> {
     // 🎯 1️⃣ Sjekk om verdien finnes som en miljøvariabel
     if let Ok(value) = env::var(env_key) {
         return Ok(value);
@@ -33,7 +37,11 @@ pub fn get_config_path() -> Option<String> {
 }
 
 /// 🔑 Henter en verdi fra miljøvariabler, config.toml eller keyring
-pub async fn get_value_from_env_or_config(env_key: &str, config_key: &str, keyring_service: Option<&str>) -> Result<String> {
+pub async fn get_value_from_env_or_config(
+    env_key: &str,
+    config_key: &str,
+    keyring_service: Option<&str>,
+) -> Result<String> {
     // 🎯 1️⃣ Sjekk miljøvariabelen
     if let Ok(value) = env::var(env_key) {
         return Ok(value);

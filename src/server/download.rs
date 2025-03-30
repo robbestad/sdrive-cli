@@ -1,14 +1,14 @@
 // src/download.rs
+use crate::encryption::{decrypt_file, DecryptedData};
+use crate::server::Config;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::Client;
-use crate::encryption::{decrypt_file, DecryptedData};
-use crate::server::Config;
 use std::path::PathBuf;
-use tokio::fs;
 use std::sync::Arc;
+use tokio::fs;
 use tokio::time::{timeout, Duration};
 
 pub struct Args {
@@ -19,7 +19,12 @@ pub struct Args {
     pub filepath: String,
 }
 
-pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc<Config>) -> Result<Vec<u8>> {
+pub async fn download_file(
+    client: &Client,
+    cid: &str,
+    args: &Args,
+    config: &Arc<Config>,
+) -> Result<Vec<u8>> {
     println!("🔑 CID: {}", cid);
     println!("🔑 Encrypted: {}", args.encrypted);
     println!("🔑 Encryption key: {:?}", args.key);
@@ -29,12 +34,12 @@ pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc
     println!("🔑 Sync_dir: {}", config.sync_dir);
 
     let local_url = "http://localhost:5002/api/v0/cat".to_string();
-    let response = timeout(Duration::from_secs(10), client
-        .post(&local_url)
-        .query(&[("arg", cid)])
-        .send())
-        .await
-        .map_err(|_| anyhow::anyhow!("Timeout waiting for IPFS response"))??;
+    let response = timeout(
+        Duration::from_secs(10),
+        client.post(&local_url).query(&[("arg", cid)]).send(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Timeout waiting for IPFS response"))??;
 
     if !response.status().is_success() {
         return Err(anyhow::anyhow!(
@@ -62,7 +67,10 @@ pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc
     let data = if args.encrypted {
         if let Some(key) = &args.key {
             if encrypted_data.len() < 72 {
-                return Err(anyhow::anyhow!("Encrypted file too short (length: {}).", encrypted_data.len()));
+                return Err(anyhow::anyhow!(
+                    "Encrypted file too short (length: {}).",
+                    encrypted_data.len()
+                ));
             }
 
             let nonce = &encrypted_data[60..72];
@@ -72,7 +80,10 @@ pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc
                 Ok(key) => key,
                 Err(e) => {
                     println!("❌ Base64 decode failed for key '{}': {}", key, e);
-                    return Err(anyhow::anyhow!("Invalid per-file key (base64 decode failed): {}", e));
+                    return Err(anyhow::anyhow!(
+                        "Invalid per-file key (base64 decode failed): {}",
+                        e
+                    ));
                 }
             };
 
@@ -80,7 +91,10 @@ pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc
                 Ok(cipher) => cipher,
                 Err(e) => {
                     println!("❌ Invalid key length for '{}': {}", key, e);
-                    return Err(anyhow::anyhow!("Invalid per-file key length (expected 32 bytes): {}", e));
+                    return Err(anyhow::anyhow!(
+                        "Invalid per-file key length (expected 32 bytes): {}",
+                        e
+                    ));
                 }
             };
 
@@ -88,7 +102,10 @@ pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc
                 Ok(data) => data,
                 Err(e) => {
                     println!("❌ Decryption failed with key '{}': {}", key, e);
-                    return Err(anyhow::anyhow!("Decryption failed with per-file key: {}", e));
+                    return Err(anyhow::anyhow!(
+                        "Decryption failed with per-file key: {}",
+                        e
+                    ));
                 }
             };
 
@@ -96,24 +113,33 @@ pub async fn download_file(client: &Client, cid: &str, args: &Args, config: &Arc
                 fs::create_dir_all(parent).await?;
             }
             fs::write(&final_output_path, &plaintext).await?;
-            println!("✅ File downloaded and decrypted to {}", final_output_path.display());
+            println!(
+                "✅ File downloaded and decrypted to {}",
+                final_output_path.display()
+            );
             plaintext
         } else {
-            let temp_file = std::env::temp_dir()
-                .join(format!("sdrive_download_{}.enc", rand::random::<u64>()));
+            let temp_file =
+                std::env::temp_dir().join(format!("sdrive_download_{}.enc", rand::random::<u64>()));
             fs::write(&temp_file, &encrypted_data).await?;
 
             if let Some(parent) = final_output_path.parent() {
                 fs::create_dir_all(parent).await?;
             }
-            let decrypted: DecryptedData<Vec<u8>> = timeout(Duration::from_secs(10), decrypt_file(&temp_file, Some(&final_output_path)))
-                .await
-                .map_err(|_| anyhow::anyhow!("Timeout waiting for master key decryption"))??;
+            let decrypted: DecryptedData<Vec<u8>> = timeout(
+                Duration::from_secs(10),
+                decrypt_file(&temp_file, Some(&final_output_path)),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("Timeout waiting for master key decryption"))??;
             fs::remove_file(&temp_file).await?;
 
             match decrypted {
                 DecryptedData::Raw(data) => {
-                    println!("✅ File downloaded and decrypted with master key to {}", final_output_path.display());
+                    println!(
+                        "✅ File downloaded and decrypted with master key to {}",
+                        final_output_path.display()
+                    );
                     data
                 }
                 DecryptedData::Structured(_) => unreachable!("Expected raw bytes"),

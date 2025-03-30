@@ -1,6 +1,6 @@
-use reqwest::StatusCode;
 use anyhow::Result;
 use reqwest::Client;
+use reqwest::StatusCode;
 use serde_json::json;
 
 pub async fn check_file_exists(user_guid: &str, file_name: &str) -> Result<bool> {
@@ -10,7 +10,7 @@ pub async fn check_file_exists(user_guid: &str, file_name: &str) -> Result<bool>
     );
     println!("Checking if file exists: {}", url);
     let response = reqwest::get(&url).await?;
-    
+
     // Anta at et 200-status svar betyr at filen finnes, mens 404 betyr at den ikke finnes.
     match response.status() {
         StatusCode::OK => Ok(true),
@@ -26,7 +26,7 @@ pub async fn file_exists_head(user_guid: &str, file_name: &str) -> Result<bool> 
     let url = format!("https://cdn.sdrive.pro/{}/{}", user_guid, file_name);
     let client = reqwest::Client::new();
     let response = client.head(&url).send().await?;
-    
+
     match response.status() {
         StatusCode::OK => Ok(true),
         StatusCode::NOT_FOUND => Ok(false),
@@ -37,7 +37,11 @@ pub async fn file_exists_head(user_guid: &str, file_name: &str) -> Result<bool> 
     }
 }
 
-pub async fn fetch_guid_from_cid(client: &Client, guid: &str, apikey: &str) -> Result<serde_json::Value> {
+pub async fn fetch_guid_from_cid(
+    client: &Client,
+    guid: &str,
+    apikey: &str,
+) -> Result<serde_json::Value> {
     let api_url = "https://backend.sdrive.app/cid-to-guid";
     tracing::debug!("Sending POST request to: {}", api_url);
 
@@ -46,11 +50,7 @@ pub async fn fetch_guid_from_cid(client: &Client, guid: &str, apikey: &str) -> R
         "apikey": apikey
     });
 
-    let response = client
-        .post(api_url)
-        .json(&payload)
-        .send()
-        .await?;
+    let response = client.post(api_url).json(&payload).send().await?;
 
     if !response.status().is_success() {
         return Err(anyhow::anyhow!(

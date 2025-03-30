@@ -50,8 +50,6 @@ impl Default for Config {
     }
 }
 
-
-
 pub async fn generate_and_save_key(_config_path_option: Option<String>) -> io::Result<()> {
     // Generer en ny 32-bytes krypteringsnøkkel
     let key = encryption::generate_key();
@@ -141,14 +139,19 @@ pub async fn prompt_and_save_config(
         "Please enter the location of your sync path",
     )
     .await?;
-    let api_key = set_value(api_key_option, Some(config.api_key), "Please enter your API key").await?;
+    let api_key = set_value(
+        api_key_option,
+        Some(config.api_key),
+        "Please enter your API key",
+    )
+    .await?;
     let user_guid = set_value(
         user_guid_option,
         Some(config.user_guid),
         "Please enter your GUID or press Enter to ignore",
     )
     .await?;
- 
+
     // Determine the path to the configuration file
     fs::create_dir_all(&config_path)?; // Create .config directory if it doesn't exist
     config_path.push("config.toml");
@@ -164,7 +167,6 @@ pub async fn prompt_and_save_config(
 
     Ok(())
 }
-
 
 pub async fn read_config(config_path_option: Option<String>) -> Result<Config, io::Error> {
     let config_file_path = match config_path_option {
@@ -188,8 +190,8 @@ pub async fn read_config(config_path_option: Option<String>) -> Result<Config, i
     if config_file_path.exists() {
         println!("📖 Reading config from file: {:?}", config_file_path);
         let contents = tokio_fs::read_to_string(&config_file_path).await?;
-        let mut config: Config = toml::from_str(&contents)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let mut config: Config =
+            toml::from_str(&contents).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         // Sjekk om noen verdier mangler i filen og hent fra env
         if config.api_key.is_empty() {
@@ -207,7 +209,10 @@ pub async fn read_config(config_path_option: Option<String>) -> Result<Config, i
 
         Ok(config)
     } else {
-        println!("⚠️ Config file not found at {:?}, using environment variables and defaults.", config_file_path);
+        println!(
+            "⚠️ Config file not found at {:?}, using environment variables and defaults.",
+            config_file_path
+        );
         Ok(Config::default())
     }
 }

@@ -36,7 +36,12 @@ pub async fn poll_file_status(client: &Client, file_guid: &str) -> Result<String
             if body_text.trim().is_empty() {
                 tracing::debug!("Response body is empty, retrying...");
                 wait_seconds += 1;
-                tracing::debug!("😴 Sleeping for {} seconds (attempt {}/{})", wait_seconds, attempt, max_attempts);
+                tracing::debug!(
+                    "😴 Sleeping for {} seconds (attempt {}/{})",
+                    wait_seconds,
+                    attempt,
+                    max_attempts
+                );
                 sleep(Duration::from_secs(wait_seconds as u64)).await;
                 continue;
             }
@@ -57,7 +62,12 @@ pub async fn poll_file_status(client: &Client, file_guid: &str) -> Result<String
                     }
                     tracing::debug!("❌ No valid cdn_url or url found, retrying...");
                     wait_seconds += 1;
-                    tracing::debug!("😴 Sleeping for {} seconds (attempt {}/{})", wait_seconds, attempt, max_attempts);
+                    tracing::debug!(
+                        "😴 Sleeping for {} seconds (attempt {}/{})",
+                        wait_seconds,
+                        attempt,
+                        max_attempts
+                    );
                     sleep(Duration::from_secs(wait_seconds as u64)).await;
                 }
                 Err(e) => {
@@ -71,7 +81,11 @@ pub async fn poll_file_status(client: &Client, file_guid: &str) -> Result<String
             }
         } else {
             let error_text = response.text().await?;
-            tracing::info!("❌ Non-success response: {} - Body: '{}'", status, error_text);
+            tracing::info!(
+                "❌ Non-success response: {} - Body: '{}'",
+                status,
+                error_text
+            );
             return Err(anyhow::anyhow!(
                 "API returned non-success status: {}",
                 status

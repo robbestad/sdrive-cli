@@ -38,6 +38,8 @@ hex = "0.4.3"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 actix-web = "4.10.2"
+actix-governor = "0.8.0"
+ignore = "0.4.23"
 
 
 

@@ -1,21 +1,21 @@
-use crate::secret::{get_value_from_env_or_config};
+use crate::encryption::encrypt_file;
+use crate::secret::get_value_from_env_or_config;
+use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use indicatif::{ProgressBar, ProgressStyle};
 use mime_guess::from_path;
+use reqwest::multipart::{Form, Part};
 use reqwest::Client;
+use serde::Serialize;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
+use std::path::PathBuf;
 use tokio::time::sleep;
 use tokio::time::Duration;
-use anyhow::{Result, Context};
-use std::path::PathBuf;
-use reqwest::multipart::{Form, Part};
-use serde::Serialize;
-use serde_json::json;
-use crate::encryption::encrypt_file;
 mod poll;
 use poll::poll_file_status;
 
@@ -260,8 +260,8 @@ pub async fn upload_file(
     let api_key = get_value_from_env_or_config("SDRIVE_API_KEY", "api_key", Some("sdrive")).await?;
 
     // 🆔 Hent bruker-GUID
-    let user_guid = get_value_from_env_or_config("SDRIVE_USER_GUID", "user_guid", Some("sdrive")).await?;
-
+    let user_guid =
+        get_value_from_env_or_config("SDRIVE_USER_GUID", "user_guid", Some("sdrive")).await?;
 
     let is_valid = is_valid_api_key(&api_key).await?;
     if !is_valid {
@@ -424,10 +424,7 @@ pub async fn upload_file(
     Ok(())
 }
 
-pub async fn pin_file(
-    file_path: PathBuf,
-    unencrypted: bool,
-) -> Result<String> {
+pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<String> {
     let client = Client::new();
     let ipfs_api_url = "http://localhost:5002/api/v0/add"; // 📌 Bruker lokal IPFS instans
 
@@ -455,7 +452,7 @@ pub async fn pin_file(
         println!("🔐 Starter kryptering av fil...");
         let (encrypted_content, per_file_key) = encrypt_file(&file_path).await?;
         println!("✅ Fil kryptert: {} bytes", encrypted_content.len());
-        
+
         let encrypted_file_size = encrypted_content.len();
         if encrypted_file_size < 56 {
             return Err(anyhow::anyhow!(
@@ -468,16 +465,22 @@ pub async fn pin_file(
         let (_key_nonce, rest) = rest.split_at(12);
         let (nonce, _ciphertext) = rest.split_at(12);
         let nonce_b64 = STANDARD.encode(nonce);
-        println!("🔑 Del denne filen sikkert med denne nøkkelen: {}", STANDARD.encode(per_file_key));
+        println!(
+            "🔑 Del denne filen sikkert med denne nøkkelen: {}",
+            STANDARD.encode(per_file_key)
+        );
         (encrypted_content, nonce_b64, Some(per_file_key))
     };
 
     // 📡 Last opp til IPFS (lokalt)
     println!("📤 Starter opplasting til IPFS...");
-    let form = reqwest::multipart::Form::new()
-        .part("file", reqwest::multipart::Part::bytes(file_content.clone()));
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(file_content.clone()),
+    );
 
-    let response = client.post(ipfs_api_url)
+    let response = client
+        .post(ipfs_api_url)
         .multipart(form)
         .send()
         .await
@@ -487,7 +490,10 @@ pub async fn pin_file(
 
     if !response.status().is_success() {
         let status = response.status();
-        let error_text = response.text().await.unwrap_or_else(|_| "⚠️ Kunne ikke lese feilmelding".to_string());
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "⚠️ Kunne ikke lese feilmelding".to_string());
         return Err(anyhow::anyhow!(
             "❌ IPFS opplasting feilet med status {}: {}",
             status,
@@ -495,14 +501,18 @@ pub async fn pin_file(
         ));
     }
 
-    let response_text = response.text().await.unwrap_or_else(|_| "⚠️ Mottok ingen respons".to_string());
+    let response_text = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "⚠️ Mottok ingen respons".to_string());
     println!("📥 Mottok respons fra IPFS: {}", response_text);
 
     // 📍 Hent CID fra svaret
     let cid: serde_json::Value = serde_json::from_str(&response_text)
         .with_context(|| format!("❌ Kunne ikke parse IPFS respons: {}", response_text))?;
-    
-    let hash = cid["Hash"].as_str()
+
+    let hash = cid["Hash"]
+        .as_str()
         .context("❌ CID mangler i responsen")?
         .to_string();
 
@@ -511,7 +521,8 @@ pub async fn pin_file(
     // 📌 Pin CID lokalt
     println!("📌 Pinner CID lokalt...");
     let pin_url = format!("http://localhost:5002/api/v0/pin/add?arg={}", hash);
-    let pin_response = client.post(&pin_url)
+    let pin_response = client
+        .post(&pin_url)
         .send()
         .await
         .with_context(|| "❌ Feil ved pinning av CID")?;
@@ -524,11 +535,14 @@ pub async fn pin_file(
         let unencrypted = true;
         println!("💾 Uploading file to SDrive...");
         //upload_file(file_path, parent_folder, unencrypted, overwrite).await?;
-    } 
-    
+    }
+
     if !pin_response.status().is_success() {
         let status = pin_response.status();
-        let error_text = pin_response.text().await.unwrap_or_else(|_| "⚠️ Kunne ikke lese feilmelding".to_string());
+        let error_text = pin_response
+            .text()
+            .await
+            .unwrap_or_else(|_| "⚠️ Kunne ikke lese feilmelding".to_string());
         return Err(anyhow::anyhow!(
             "❌ Pinning feilet med status {}: {}",
             status,

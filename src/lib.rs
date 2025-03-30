@@ -1,9 +1,9 @@
 pub mod cli;
 pub mod config;
 pub mod encryption;
+pub mod file;
 pub mod fingerprint;
 pub mod parse;
-pub mod upload;
-pub mod file;
-pub mod server;
 pub mod secret;
+pub mod server;
+pub mod upload;

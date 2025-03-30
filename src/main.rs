@@ -8,16 +8,16 @@ use sdrive::{
     cli::{Cli, Commands, ConfigSubcommands},
     config::{generate_and_save_key, prompt_and_save_config, read_config},
     encryption::{decrypt_file, export_key, import_key, DecryptedData},
-    upload::process_upload,
     file::fetch_guid_from_cid,
     secret::get_config_path,
     server::start_server,
+    upload::process_upload,
 };
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tokio::time::{timeout, Duration};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use url::Url;
-use tokio::time::{timeout, Duration};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -78,7 +78,8 @@ async fn main() -> Result<()> {
                 path
             });
 
-            let decrypted: DecryptedData<Vec<u8>> = decrypt_file(&args.file, Some(&output_path)).await?;
+            let decrypted: DecryptedData<Vec<u8>> =
+                decrypt_file(&args.file, Some(&output_path)).await?;
             match decrypted {
                 DecryptedData::Raw(_) => println!(
                     "✅ File decrypted successfully to {}",
@@ -127,29 +128,28 @@ async fn main() -> Result<()> {
 
                     // Step 1: Check local IPFS node
                     // Step 1: Check local IPFS node with POST
-                let local_url = "http://localhost:5002/api/v0/cat".to_string();
-                match timeout(
-                    Duration::from_secs(2),
-                    client
-                        .post(&local_url)
-                        .query(&[("arg", guid)])
-                        .send(),
-                )
-                .await
-                {
-                    Ok(Ok(resp)) if resp.status().is_success() => {
-                        println!("Found {} locally", guid);
-                        encrypted_data = Some(resp.bytes().await?.to_vec());
-                        original_filename = "downloaded".to_string(); // Default for local
-                    }
+                    let local_url = "http://localhost:5002/api/v0/cat".to_string();
+                    match timeout(
+                        Duration::from_secs(2),
+                        client.post(&local_url).query(&[("arg", guid)]).send(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(resp)) if resp.status().is_success() => {
+                            println!("Found {} locally", guid);
+                            encrypted_data = Some(resp.bytes().await?.to_vec());
+                            original_filename = "downloaded".to_string(); // Default for local
+                        }
                         _ => {
                             println!("CID {} not found locally, checking gateway", guid);
                             // Step 2: Fallback to gateway
-                            let config_path = Some(get_config_path().expect("Failed to get config path"));
+                            let config_path =
+                                Some(get_config_path().expect("Failed to get config path"));
                             let config = read_config(config_path).await?;
                             let api_key = config.api_key.as_str();
-                            let response: serde_json::Value = fetch_guid_from_cid(&client, guid, api_key).await?;
-                            
+                            let response: serde_json::Value =
+                                fetch_guid_from_cid(&client, guid, api_key).await?;
+
                             original_filename = response
                                 .get("filename")
                                 .and_then(|v| v.as_str())

@@ -31,8 +31,10 @@ pub fn store_key(key: &[u8; 32]) -> Result<()> {
 }
 
 pub async fn retrieve_key() -> Result<[u8; 32]> {
-    let key_string = get_value_from_env_or_config("SDRIVE_ENCRYPTION_KEY", "encryption_key", Some("sdrive")).await?;
-    
+    let key_string =
+        get_value_from_env_or_config("SDRIVE_ENCRYPTION_KEY", "encryption_key", Some("sdrive"))
+            .await?;
+
     let decoded = STANDARD.decode(&key_string)?;
     if decoded.len() != 32 {
         return Err(anyhow::anyhow!("Invalid encryption key length"));
@@ -122,7 +124,7 @@ pub enum DecryptedData<T> {
 
 pub async fn decrypt_file<T: DeserializeOwned + 'static>(
     encrypted_file_path: &Path,
-    output_file_path: Option<&Path>
+    output_file_path: Option<&Path>,
 ) -> Result<DecryptedData<T>> {
     let encrypted_data = fs::read(encrypted_file_path)?;
     tracing::trace!("Encrypted data size: {} bytes", encrypted_data.len());
