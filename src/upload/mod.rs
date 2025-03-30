@@ -16,7 +16,6 @@ use reqwest::multipart::{Form, Part};
 use serde::Serialize;
 use serde_json::json;
 use crate::encryption::encrypt_file;
-use std::error::Error;
 mod poll;
 use poll::poll_file_status;
 
@@ -439,7 +438,7 @@ pub async fn pin_file(
     println!("📂 Filstørrelse: {} bytes", file_path.metadata()?.len());
 
     // 🛡️ Krypter filen hvis ikke --unencrypted er satt
-    let (file_content, nonce_b64, _per_file_key_option) = if unencrypted {
+    let (file_content, _nonce_b64, _per_file_key_option) = if unencrypted {
         let content = tokio::fs::read(&file_path)
             .await
             .with_context(|| format!("❌ Kunne ikke lese filen: {:?}", file_path))?;

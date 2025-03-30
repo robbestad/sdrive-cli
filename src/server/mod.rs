@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use crate::upload::pin_file;
 use std::collections::HashSet;
-use anyhow::{Result, Context};
+use anyhow::Result;
 use std::sync::Arc;
 use std::fmt;
 use crate::config::read_config;
@@ -50,6 +50,16 @@ pub async fn watch_directory(sync_dir: &str, uploaded_files: Arc<Mutex<HashSet<P
                             continue;
                         }
 
+                        // Skippe mapper. Fiks dette senere.    
+                        if file_path.is_dir() {
+                            continue;
+                        }
+
+                        // Skippe .DS_Store filer   
+                        if file_path.extension().unwrap_or_default() == ".DS_Store" {
+                            continue;
+                        }
+
                         println!("📂 New file detected: {:?}", file_path);
 
                         let unencrypted = false;
@@ -80,9 +90,20 @@ pub async fn watch_directory(sync_dir: &str, uploaded_files: Arc<Mutex<HashSet<P
 
 async fn download_handler(
     cid: web::Path<String>,
+    filepath: web::Path<String>,
+    encrypted: web::Query<bool>,
+    encryption_key: web::Query<String>,
     client: web::Data<Client>,
 ) -> HttpResponse {
-    match download_file(&client, &cid, None).await {
+    let args = download::Args {
+        output: None,
+        encrypted: encrypted.into_inner(),
+        key: Some(encryption_key.into_inner()),
+        filename: cid.to_string(),
+        filepath: filepath.to_string()
+    };
+    
+    match download_file(&client, &cid, &args).await {
         Ok(data) => HttpResponse::Ok()
             .content_type("application/octet-stream")
             .body(data),
@@ -116,11 +137,7 @@ pub async fn start_server() -> Result<()> {
         let uploaded_files = uploaded_files.clone();
         async move {
             // Run watch_directory and handle its Result to ensure () return
-            if let Err(e) = watch_directory(&config.sync_dir, uploaded_files).await {
-                println!("❌ Directory watcher failed: {}", e);
-            } else {
-                println!("📂 Directory watcher completed"); // Only if it naturally exits
-            }
+            watch_directory(&config.sync_dir, uploaded_files).await;
         }
     });
 
