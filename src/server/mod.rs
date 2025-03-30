@@ -4,18 +4,17 @@ use tokio::fs;
 use tokio::time::sleep;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
-use toml;
 use crate::upload::pin_file;
 use std::collections::HashSet;
 use anyhow::{Result, Context};
 use std::sync::Arc;
 use std::fmt;
-use keyring::Entry;
-use std::env;
 use crate::config::read_config;
 use actix_web::{web, App, HttpResponse, HttpServer};
-use crate::server::download::download_file; // Import the function
 use reqwest::Client;
+
+mod download;
+use download::download_file;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Config {
@@ -91,35 +90,62 @@ async fn download_handler(
     }
 }
 
-// 🚀 Starter serveren og begynner å overvåke filer
 pub async fn start_server() -> Result<()> {
     println!("🚀 Starting S-Node in server mode...");
-    let client = Client::new();
-    HttpServer::new(move || {
-        App::new()
-            .app_data(web::Data::new(client.clone())) // Share the client
-            .route("/download/{cid}", web::get().to(download_handler))
-    })
-    .bind("0.0.0.0:8081")? // Different port from IPFS gateway (8080)
-    .run()
-    .await?;
 
-    // Henter config, automatisk fra miljøvariabler, fallback til config.toml
+    // Henter config
     let config = read_config(None).await?;
 
+    // println!("🔑 API Key: {}", config.api_key);
+    // println!("🔑 User GUID: {}", config.user_guid);
+    // println!("🔑 Sync Directory: {}", config.sync_dir);
+    // println!("🔑 Encryption Key: {}", config.encryption_key);
+
     if config.api_key.is_empty() || config.user_guid.is_empty() || config.encryption_key.is_empty() {
-        anyhow::bail!("❌ Missing required configuration. Ensure API_KEY, USER_GUID, and ENCRYPTION_KEY are set.");
+        anyhow::bail!("❌ Missing required configuration. Ensure SDRIVE_API_KEY, SDRIVE_USER_GUID, and SDRIVE_ENCRYPTION_KEY are set or provided in the config file.");
     }
 
     println!("✅ Config loaded");
 
     let uploaded_files = Arc::new(Mutex::new(HashSet::new()));
+    let client = Client::new();
 
+    // Spawn directory watcher as a background task
+    let watcher_handle = tokio::spawn({
+        let config = config.clone();
+        let uploaded_files = uploaded_files.clone();
+        async move {
+            // Run watch_directory and handle its Result to ensure () return
+            if let Err(e) = watch_directory(&config.sync_dir, uploaded_files).await {
+                println!("❌ Directory watcher failed: {}", e);
+            } else {
+                println!("📂 Directory watcher completed"); // Only if it naturally exits
+            }
+        }
+    });
+
+
+    // Start HTTP server
+    println!("🌏 Starting HTTP server...");
+    let server = HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(client.clone()))
+            .route("/download/{cid}", web::get().to(download_handler))
+    })
+    .bind("0.0.0.0:8081")?
+    .run();
+
+    // Run server and wait for Ctrl+C
     tokio::select! {
-        _ = watch_directory(&config.sync_dir, uploaded_files.clone()) => {},
+        result = server => {
+            if let Err(e) = result {
+                println!("❌ Server error: {}", e);
+            }
+        }
         _ = tokio::signal::ctrl_c() => {
-            println!("👋 Shutdown signal received, exiting...");
-        },
+            println!("👋 Shutdown signal received, stopping...");
+            watcher_handle.abort(); // Stop the watcher
+        }
     }
 
     Ok(())

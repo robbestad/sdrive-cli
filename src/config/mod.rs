@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use tokio::fs as tokio_fs;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     #[serde(default = "default_api_key")]
     pub api_key: String,
@@ -49,7 +49,6 @@ impl Default for Config {
         }
     }
 }
-
 
 
 
