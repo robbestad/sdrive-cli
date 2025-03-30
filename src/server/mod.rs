@@ -36,8 +36,7 @@ struct AppState {
 #[derive(serde::Deserialize)]
 struct DownloadQuery {
     filepath: Option<String>,
-    encrypted: Option<bool>,
-    encryption_key: Option<String>,
+    key: Option<String>,
 }
 
 impl fmt::Display for Config {
@@ -206,7 +205,7 @@ async fn download_handler(
     }
 
     let pinned_cids = state.pinned_cids.lock().await;
-    let filename_from_cache = pinned_cids.get(&cid.to_string()).cloned();
+    let _filename_from_cache = pinned_cids.get(&cid.to_string()).cloned();
     drop(pinned_cids);
 
     let db_conn = state.db_conn.lock().await;
@@ -223,24 +222,15 @@ async fn download_handler(
             )
         }
     };
+   
+    let key = query.key.clone().unwrap_or_else(|| file_key.unwrap_or_default());
 
-    let is_encrypted = query.encrypted.unwrap_or(false);
-    let key = if is_encrypted {
-        query.encryption_key.clone().or(file_key) // Use DB key if query key is None
-    } else {
-        None
-    };
-
-    println!("🔍 Received key in handler: {:?}", query.encryption_key);
     println!("🔍 Using key (from query or DB): {:?}", key);
-
-    if is_encrypted && key.is_none() {
-        println!("⚠️ No encryption key provided or found in DB; using master key from keyring.");
-    }
+    println!("🔍 Received key in handler: {:?}", query.key);
 
     let args = Args {
         output: None,
-        key,
+        key: Some(key),
         filename: cid.to_string(),
         filepath: query.filepath.clone().unwrap_or_default(),
     };
@@ -332,7 +322,7 @@ pub async fn start_server() -> Result<()> {
             .wrap(Logger::default())
             .app_data(web::QueryConfig::default().error_handler(|err, _| {
                 actix_web::error::ErrorBadRequest(format!(
-                    "❌ Ugyldig format for query-parametre. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1?encryption_key=optional_key\n\nTechnical details: {}",
+                    "❌ Ugyldig format for query-parametre. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1?key=optional_key\n\nTechnical details: {}",
                     err
                 ))
             }))
