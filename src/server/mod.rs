@@ -13,7 +13,9 @@ use std::fmt;
 use keyring::Entry;
 use std::env;
 use crate::config::read_config;
-
+use actix_web::{web, App, HttpResponse, HttpServer};
+use crate::server::download::download_file; // Import the function
+use reqwest::Client;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Config {
@@ -30,46 +32,6 @@ impl fmt::Display for Config {
             self.user_guid, self.sync_dir
         )
     }
-}
-
-
-async fn load_encryption_key() -> Result<String> {
-    // 🎯 1️⃣ Prøv først å hente nøkkelen fra miljøvariabelen
-    if let Ok(enc_key) = env::var("SDRIVE_ENCRYPTION_KEY") {
-        return Ok(enc_key);
-    }
-
-    // 🔐 2️⃣ Hvis ikke, prøv å hente fra systemets keyring
-    let entry = Entry::new("sdrive", "encryption_key").context("Failed to access keyring")?;
-    match entry.get_password() {
-        Ok(password) => Ok(password),
-        Err(_) => anyhow::bail!(
-            "❌ Encryption key not found! Set SDRIVE_ENCRYPTION_KEY env variable or store it in keyring."
-        ),
-    }
-}
-// 🚀 Laster inn og validerer konfigurasjonen
-async fn load_config(path: &str) -> Result<Config> {
-    let config_content = tokio::fs::read_to_string(path)
-        .await
-        .with_context(|| format!("⚠️ Failed to read config file at {}", path))?;
-
-    let mut config: Config = toml::from_str(&config_content)
-        .with_context(|| "⚠️ Failed to parse config file")?;
-
-    // 🔑 Henter API-nøkkel fra env eller config
-    if let Ok(api_key) = env::var("SDRIVE_API_KEY") {
-        config.api_key = api_key;
-    }
-
-    if let Ok(user_guid) = env::var("SDRIVE_USER_GUID") {
-        config.user_guid = user_guid;
-    }
-
-    println!("✅ Config loaded successfully.");
-    println!("🔑 Encryption key loaded successfully.");
-
-    Ok(config)
 }
 
 // 🚀 Overvåker en mappe og laster opp filer automatisk
@@ -117,9 +79,30 @@ pub async fn watch_directory(sync_dir: &str, uploaded_files: Arc<Mutex<HashSet<P
     }
 }
 
+async fn download_handler(
+    cid: web::Path<String>,
+    client: web::Data<Client>,
+) -> HttpResponse {
+    match download_file(&client, &cid, None).await {
+        Ok(data) => HttpResponse::Ok()
+            .content_type("application/octet-stream")
+            .body(data),
+        Err(e) => HttpResponse::InternalServerError().body(format!("Download failed: {}", e)),
+    }
+}
+
 // 🚀 Starter serveren og begynner å overvåke filer
 pub async fn start_server() -> Result<()> {
     println!("🚀 Starting S-Node in server mode...");
+    let client = Client::new();
+    HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(client.clone())) // Share the client
+            .route("/download/{cid}", web::get().to(download_handler))
+    })
+    .bind("0.0.0.0:8081")? // Different port from IPFS gateway (8080)
+    .run()
+    .await?;
 
     // Henter config, automatisk fra miljøvariabler, fallback til config.toml
     let config = read_config(None).await?;
