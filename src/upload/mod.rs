@@ -242,6 +242,13 @@ pub async fn upload_file(
         Some(name) => name.to_string_lossy().to_string(),
         None => panic!("Failed to get the file name."),
     };
+
+    // Skip .DS_Store files
+    if file_name == ".DS_Store" {
+        println!("⏭️ Skipping .DS_Store file");
+        return Ok(());
+    }
+
     println!("🚀 Uploading {}", &file_name);
 
     let mut folder = parent_folder.display().to_string();
@@ -515,7 +522,8 @@ pub async fn pin_file(
         let parent_folder = file_path.parent().unwrap_or(&file_path).to_path_buf();
         let overwrite = true;
         let unencrypted = true;
-        upload_file(file_path, parent_folder, unencrypted, overwrite).await?;
+        println!("💾 Uploading file to SDrive...");
+        //upload_file(file_path, parent_folder, unencrypted, overwrite).await?;
     } 
     
     if !pin_response.status().is_success() {

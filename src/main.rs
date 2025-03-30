@@ -98,7 +98,9 @@ async fn main() -> Result<()> {
                 ));
             }
 
+            #[allow(unused_assignments)]
             let mut encrypted_data: Option<Vec<u8>> = None;
+            #[allow(unused_assignments)]
             let mut original_filename = String::new();
 
             match host {

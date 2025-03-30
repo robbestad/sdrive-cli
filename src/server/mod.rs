@@ -6,21 +6,28 @@ use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use crate::upload::pin_file;
 use std::collections::HashSet;
-use anyhow::Result;
 use std::sync::Arc;
 use std::fmt;
-use crate::config::read_config;
+use crate::config::{read_config, Config};
 use actix_web::{web, App, HttpResponse, HttpServer};
+use anyhow::Result;
 use reqwest::Client;
-
 mod download;
-use download::download_file;
+use download::{download_file, Args};
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Config {
-    api_key: String,
-    user_guid: String,
-    sync_dir: String,
+
+// App state struct to hold both Client and Config
+#[derive(Clone)]
+struct AppState {
+    client: Client,
+    config: Arc<Config>,
+}
+
+#[derive(serde::Deserialize)]
+struct DownloadQuery {
+    filepath: Option<String>,
+    encrypted: Option<bool>,
+    encryption_key: Option<String>,
 }
 
 impl fmt::Display for Config {
@@ -90,37 +97,47 @@ pub async fn watch_directory(sync_dir: &str, uploaded_files: Arc<Mutex<HashSet<P
 
 async fn download_handler(
     cid: web::Path<String>,
-    filepath: web::Path<String>,
-    encrypted: web::Query<bool>,
-    encryption_key: web::Query<String>,
-    client: web::Data<Client>,
-) -> HttpResponse {
-    let args = download::Args {
+    query: web::Query<DownloadQuery>,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, actix_web::Error> {
+    if cid.is_empty() {
+        return Ok(HttpResponse::BadRequest().body("❌ CID er påkrevd. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1"));
+    }
+
+    let is_encrypted = query.encrypted.unwrap_or(false);
+    let key = query.encryption_key.clone();
+
+    if is_encrypted && key.is_none() {
+        println!("⚠️ No encryption key provided; using master key from keyring.");
+    }
+
+    let args = Args {
         output: None,
-        encrypted: encrypted.into_inner(),
-        key: Some(encryption_key.into_inner()),
+        encrypted: is_encrypted,
+        key, // Pass the raw key as received
         filename: cid.to_string(),
-        filepath: filepath.to_string()
+        filepath: query.filepath.clone().unwrap_or_default(),
     };
-    
-    match download_file(&client, &cid, &args).await {
-        Ok(data) => HttpResponse::Ok()
-            .content_type("application/octet-stream")
-            .body(data),
-        Err(e) => HttpResponse::InternalServerError().body(format!("Download failed: {}", e)),
+
+    match download_file(&state.client, &cid, &args, &state.config).await {
+        Ok(data) => {
+            let filename = if !args.filepath.is_empty() {
+                args.filepath.clone()
+            } else {
+                cid.to_string()
+            };
+            Ok(HttpResponse::Ok()
+                .content_type("application/octet-stream")
+                .append_header(("Content-Disposition", format!("attachment; filename=\"{}\"", filename)))
+                .body(data))
+        }
+        Err(e) => Ok(HttpResponse::InternalServerError().body(format!("❌ Nedlasting feilet: {}", e))),
     }
 }
 
 pub async fn start_server() -> Result<()> {
     println!("🚀 Starting S-Node in server mode...");
-
-    // Henter config
     let config = read_config(None).await?;
-
-    // println!("🔑 API Key: {}", config.api_key);
-    // println!("🔑 User GUID: {}", config.user_guid);
-    // println!("🔑 Sync Directory: {}", config.sync_dir);
-    // println!("🔑 Encryption Key: {}", config.encryption_key);
 
     if config.api_key.is_empty() || config.user_guid.is_empty() || config.encryption_key.is_empty() {
         anyhow::bail!("❌ Missing required configuration. Ensure SDRIVE_API_KEY, SDRIVE_USER_GUID, and SDRIVE_ENCRYPTION_KEY are set or provided in the config file.");
@@ -130,29 +147,34 @@ pub async fn start_server() -> Result<()> {
 
     let uploaded_files = Arc::new(Mutex::new(HashSet::new()));
     let client = Client::new();
+    let app_state = AppState {
+        client,
+        config: Arc::new(config),
+    };
 
-    // Spawn directory watcher as a background task
     let watcher_handle = tokio::spawn({
-        let config = config.clone();
+        let config = app_state.config.clone();
         let uploaded_files = uploaded_files.clone();
         async move {
-            // Run watch_directory and handle its Result to ensure () return
             watch_directory(&config.sync_dir, uploaded_files).await;
         }
     });
 
-
-    // Start HTTP server
     println!("🌏 Starting HTTP server...");
     let server = HttpServer::new(move || {
         App::new()
-            .app_data(web::Data::new(client.clone()))
+            .app_data(web::Data::new(app_state.clone()))
+            .app_data(web::QueryConfig::default().error_handler(|err, _| {
+                actix_web::error::ErrorBadRequest(format!(
+                    "❌ Ugyldig format for query-parametre. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1?encrypted=true&encryption_key=din_nøkkel\n\nTeknisk detalj: {}",
+                    err
+                ))
+            }))
             .route("/download/{cid}", web::get().to(download_handler))
     })
     .bind("0.0.0.0:8081")?
     .run();
 
-    // Run server and wait for Ctrl+C
     tokio::select! {
         result = server => {
             if let Err(e) = result {
@@ -161,7 +183,7 @@ pub async fn start_server() -> Result<()> {
         }
         _ = tokio::signal::ctrl_c() => {
             println!("👋 Shutdown signal received, stopping...");
-            watcher_handle.abort(); // Stop the watcher
+            watcher_handle.abort();
         }
     }
 
