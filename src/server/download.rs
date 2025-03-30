@@ -1,4 +1,3 @@
-// src/download.rs
 use crate::encryption::{decrypt_file, DecryptedData};
 use crate::server::Config;
 use aes_gcm::aead::{Aead, KeyInit};
@@ -50,6 +49,10 @@ pub async fn download_file(
     println!("📏 Encrypted data length: {}", encrypted_data.len());
 
     let base_dir = PathBuf::from(&config.sync_dir);
+    let temp_dir = base_dir.join("temp");
+    fs::create_dir_all(&temp_dir).await?; // Opprett temp-katalog hvis den ikke finnes
+
+    let temp_file = temp_dir.join(format!("download_{}_{}", cid, rand::random::<u64>()));
     let output_path = if !args.filepath.is_empty() {
         if args.filepath.starts_with("~/") {
             base_dir.join(args.filepath.trim_start_matches("~/"))
@@ -107,19 +110,24 @@ pub async fn download_file(
                 }
             };
 
+            // Mellomlagring i temp
+            fs::write(&temp_file, &plaintext).await?;
+            println!("📥 Temporary file stored at {}", temp_file.display());
+
+            // Flytt til endelig plassering
             if let Some(parent) = final_output_path.parent() {
                 fs::create_dir_all(parent).await?;
             }
-            fs::write(&final_output_path, &plaintext).await?;
+            fs::rename(&temp_file, &final_output_path).await?;
             println!(
                 "✅ File downloaded and decrypted to {}",
                 final_output_path.display()
             );
             plaintext
         } else {
-            let temp_file =
-                std::env::temp_dir().join(format!("sdrive_download_{}.enc", rand::random::<u64>()));
+            // Mellomlagring av kryptert fil
             fs::write(&temp_file, &encrypted_data).await?;
+            println!("📥 Temporary file stored at {}", temp_file.display());
 
             if let Some(parent) = final_output_path.parent() {
                 fs::create_dir_all(parent).await?;
@@ -130,7 +138,10 @@ pub async fn download_file(
             )
             .await
             .map_err(|_| anyhow::anyhow!("Timeout waiting for master key decryption"))??;
+
+            // Slett temp-fil etter dekryptering
             fs::remove_file(&temp_file).await?;
+            println!("🗑️ Temporary file removed: {}", temp_file.display());
 
             match decrypted {
                 DecryptedData::Raw(data) => {
@@ -144,10 +155,15 @@ pub async fn download_file(
             }
         }
     } else {
+        // Mellomlagring av ukryptert fil
+        fs::write(&temp_file, &encrypted_data).await?;
+        println!("📥 Temporary file stored at {}", temp_file.display());
+
+        // Flytt til endelig plassering
         if let Some(parent) = final_output_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        fs::write(&final_output_path, &encrypted_data).await?;
+        fs::rename(&temp_file, &final_output_path).await?;
         println!("✅ File downloaded to {}", final_output_path.display());
         encrypted_data.to_vec()
     };
