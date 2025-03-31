@@ -55,9 +55,9 @@ pub async fn generate_and_save_key(_config_path_option: Option<String>) -> io::R
     let key = encryption::generate_key();
 
     // Lagre nøkkelen i keyring (det sikre systemlagret)
-    encryption::store_key(&key).expect("Kunne ikke lagre nøkkelen i keyring");
+    encryption::store_key(&key).expect("Could not store key in keyring");
 
-    println!("Krypteringsnøkkel generert og lagret i systemets sikre nøkkellager (keyring).");
+    println!("Encryption key generated and stored in system's secure key storage (keyring).");
 
     Ok(())
 }
