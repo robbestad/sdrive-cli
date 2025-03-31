@@ -1,6 +1,6 @@
 [package]
 name = "sdrive"
-version = "1.6.0"
+version = "1.6.1"
 edition = "2021"
 description = "Command line tool for uploading and managing files on SDrive."
 license = "MIT"

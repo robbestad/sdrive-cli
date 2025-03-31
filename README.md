@@ -1,7 +1,7 @@
 # SDRIVE CLI - Secure File Sharing with End-to-End Encryption
 
 <div align="center">
-  <img src="sdrive.png" alt="SDrive Logo" width="600"/>
+  <img src="https://cdn.sdrive.pro/n8rb8v7ea3g4j9ezywaf3umj/sdrive_sm.png" alt="SDrive Workers" width="600"/>
   <p><em>Secure, encrypted file sharing with P2P capabilities</em></p>
 </div>
 
