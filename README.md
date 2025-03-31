@@ -25,6 +25,54 @@ SDRIVE CLI is a powerful command-line tool designed for secure file sharing with
 cargo install sdrive
 ```
 
+## First Steps
+
+<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+  <h3 style="margin-top: 0;">🚀 Getting Started with SDrive</h3>
+  
+  <div style="margin-bottom: 20px;">
+    <h4>1️⃣ Configure Your Environment</h4>
+    <p>First, set up your SDrive configuration with your API credentials and sync folder:</p>
+    <pre style="background-color: #fff; padding: 15px; border-radius: 5px; border: 1px solid #dee2e6;">
+    sdrive config create</pre>
+    <p>This will prompt you for:</p>
+    <ul>
+      <li>API Key (from <a href="https://sdrive.pro">sdrive.pro</a>)</li>
+      <li>User GUID</li>
+      <li>Sync directory location (default: ~/sync)</li>
+    </ul>
+  </div>
+
+  <div style="margin-bottom: 20px;">
+    <h4>2️⃣ Generate Encryption Key</h4>
+    <p>Create your personal encryption key for end-to-end encryption:</p>
+    <pre style="background-color: #fff; padding: 15px; border-radius: 5px; border: 1px solid #dee2e6;">
+    sdrive config generate-key</pre>
+    <p>This key will be:</p>
+    <ul>
+      <li>Securely stored in your system's keyring</li>
+      <li>Used for encrypting all your files</li>
+      <li>Required for decrypting files you download</li>
+    </ul>
+  </div>
+
+  <div style="margin-bottom: 20px;">
+    <h4>3️⃣ Verify Setup</h4>
+    <p>Test your configuration by uploading a file:</p>
+    <pre style="background-color: #fff; padding: 15px; border-radius: 5px; border: 1px solid #dee2e6;">
+    sdrive upload ./test.txt</pre>
+  </div>
+
+  <div style="background-color: #e9ecef; padding: 15px; border-radius: 5px; margin-top: 20px;">
+    <h4 style="margin-top: 0;">💡 Pro Tips</h4>
+    <ul>
+      <li>Back up your encryption key using <code>sdrive config export-key</code></li>
+      <li>Set up multiple devices using the same key for seamless access</li>
+      <li>Import your key with <code>sdrive config import-key</code></li>
+    </ul>
+  </div>
+</div>
+
 ## Quick Start
 
 ```bash
