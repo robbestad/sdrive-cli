@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
 
     let subscriber = FmtSubscriber::builder()
         .with_env_filter(EnvFilter::new(log_level))
-        .finish();
+        .finish();  
 
     tracing::subscriber::set_global_default(subscriber).expect("Setting default subscriber failed");
 
@@ -106,9 +106,6 @@ async fn main() -> Result<()> {
                     download_file_from_ipfs(&client, &args.url, &download_args, &config).await?;
                 }
             }
-        }
-        Commands::Sync(_args) => {
-            println!("Sync command not implemented yet.");
         }
     }
     Ok(())
