@@ -2,6 +2,11 @@ use crate::config::read_config;
 use anyhow::{Context, Result};
 use keyring::Entry;
 use std::env;
+use std::sync::OnceLock;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+static CONFIG_CACHE: OnceLock<Arc<Mutex<Option<crate::config::Config>>>> = OnceLock::new();
 
 /// 🔑 Henter en sikker verdi fra enten miljøvariabler eller `keyring`
 pub async fn get_secure_value(
@@ -49,13 +54,26 @@ pub async fn get_value_from_env_or_config(
 
     // 📄 2️⃣ Hvis ikke, prøv å lese fra `config.toml`
     let config_path = get_config_path().expect("Failed to get config path");
-    let config = read_config(Some(config_path)).await?;
+    
+    // Initialize or get the config cache
+    let cache = CONFIG_CACHE.get_or_init(|| Arc::new(Mutex::new(None)));
+    let mut cache_lock = cache.lock().await;
+    
+    // If config is not cached, read it
+    if cache_lock.is_none() {
+        let config = read_config(Some(config_path.clone())).await?;
+        *cache_lock = Some(config);
+    }
+
+    // Get the value from cached config
+    let config = cache_lock.as_ref().expect("Config should be cached");
     let value = match config_key {
-        "api_key" => config.api_key,
-        "user_guid" => config.user_guid,
-        "encryption_key" => config.encryption_key,
+        "api_key" => config.api_key.clone(),
+        "user_guid" => config.user_guid.clone(),
+        "encryption_key" => config.encryption_key.clone(),
         _ => String::new(),
     };
+
     if !value.is_empty() {
         return Ok(value);
     }
