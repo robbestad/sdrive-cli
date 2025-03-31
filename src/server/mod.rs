@@ -164,7 +164,8 @@ pub async fn start_server() -> Result<()> {
             filepath TEXT UNIQUE NOT NULL,
             file_key TEXT,
             size INTEGER,
-            modified INTEGER
+            modified INTEGER,
+            is_directory BOOLEAN DEFAULT FALSE
         )",
         [],
     )?;

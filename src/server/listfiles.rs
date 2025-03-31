@@ -18,6 +18,7 @@ struct FileEntry {
     modified: i64,
     filename: String,
     filepath: String,
+    is_directory: bool,
 }
 
 fn map_row(row: &rusqlite::Row) -> Result<FileEntry, rusqlite::Error> {
@@ -26,7 +27,8 @@ fn map_row(row: &rusqlite::Row) -> Result<FileEntry, rusqlite::Error> {
         filename: row.get(1)?,
         filepath: row.get(2)?,
         size: row.get(3)?,
-        modified: row.get(4)?, // nå som i64
+        modified: row.get(4)?,
+        is_directory: row.get(5)?,
     })
 }
 pub async fn list_files_handler(
@@ -41,9 +43,9 @@ pub async fn list_files_handler(
     let db_conn = state.db_conn.lock().await;
 
     let mut stmt = if filter_pattern.is_empty() {
-        db_conn.prepare("SELECT cid, filename, filepath, size, modified FROM pinned_files LIMIT ? OFFSET ?")
+        db_conn.prepare("SELECT cid, filename, filepath, size, modified, is_directory FROM pinned_files LIMIT ? OFFSET ?")
     } else {
-        db_conn.prepare("SELECT cid, filename, filepath, size, modified FROM pinned_files WHERE filename LIKE ? LIMIT ? OFFSET ?")
+        db_conn.prepare("SELECT cid, filename, filepath, size, modified, is_directory FROM pinned_files WHERE filename LIKE ? LIMIT ? OFFSET ?")
     }.map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
     let file_iter = if filter_pattern.is_empty() {

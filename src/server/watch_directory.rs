@@ -68,7 +68,29 @@ pub async fn watch_directory(
                             }
 
                             if file_path.is_dir() {
-                                dirs.push(file_path);
+                                dirs.push(file_path.clone());
+                                
+                                let filepath_str = file_path.to_string_lossy().to_string();
+                                let filename = file_path
+                                    .file_name()
+                                    .unwrap()
+                                    .to_string_lossy()
+                                    .to_string();
+                                let modified = file_path
+                                    .metadata()
+                                    .unwrap()
+                                    .modified()
+                                    .unwrap()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs();
+
+                                let db_conn_guard = db_conn.lock().await;
+                                db_conn_guard.execute(
+                                    "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, size, modified, is_directory) VALUES (?, ?, ?, ?, ?, ?)",
+                                    params!["", filename, filepath_str, 0, modified, true],
+                                ).unwrap();
+                                
                                 continue;
                             }
 
@@ -116,8 +138,8 @@ pub async fn watch_directory(
                                         .as_secs();
 
                                     db_conn_guard.execute(
-                                        "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, file_key, size, modified) VALUES (?, ?, ?, ?, ?, ?)",
-                                        params![cid, filename, filepath_str, file_key, size, modified],
+                                        "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, file_key, size, modified, is_directory) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                        params![cid, filename, filepath_str, file_key, size, modified, false],
                                     ).unwrap();
 
                                     if let Err(e) = store_metadata_global(
