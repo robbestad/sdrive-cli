@@ -1,20 +1,22 @@
 # SDRIVE CLI - Secure File Sharing with End-to-End Encryption
 
 <div align="center">
-  <img src="sdrive.png" alt="SDrive Logo" width="400"/>
+  <img src="sdrive.png" alt="SDrive Logo" width="600"/>
   <p><em>Secure, encrypted file sharing with P2P capabilities</em></p>
-  div>
+</div>
 
 SDRIVE CLI is a powerful command-line tool designed for secure file sharing with end-to-end encryption and per-file key sharing capabilities. Built with security and ease of use in mind, it allows you to share files with others while maintaining complete control over access and ensuring your data remains private and secure.
 
 ## Features
 
-- 🔒 **End-to-End Encryption**: Files are encrypted before upload and remain encrypted in transit
-- 🔑 **Per-File Key Sharing**: Share individual files without exposing your master key
-- 🌐 **P2P File Sharing**: Share files directly using Iroh protocol
-- 🔐 **Secure Key Management**: Master keys stored in system keyring
-- 🚀 **Multiple Upload/Download Options**: Support for both SDrive and P2P protocols
-- 📝 **Flexible Configuration**: Customizable settings for sync directories and API access
+<ul>
+  <li><strong>🔒 End-to-End Encryption</strong>: Files are encrypted before upload and remain encrypted in transit</li>
+  <li><strong>🔑 Per-File Key Sharing</strong>: Share individual files without exposing your master key</li>
+  <li><strong>🌐 P2P File Sharing</strong>: Share files directly using Iroh protocol</li>
+  <li><strong>🔐 Secure Key Management</strong>: Master keys stored in system keyring</li>
+  <li><strong>🚀 Multiple Upload/Download Options</strong>: Support for both SDrive and P2P protocols</li>
+  <li><strong>📝 Flexible Configuration</strong>: Customizable settings for sync directories and API access</li>
+</ul>
 
 ## Installation
 
