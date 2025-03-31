@@ -9,7 +9,6 @@ use reqwest::Client;
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -18,22 +17,9 @@ use tokio::time::sleep;
 use tokio::time::Duration;
 mod poll;
 use poll::poll_file_status;
+use crate::file::is_file_uploaded;
 
 const MAX_RETRIES: usize = 3;
-
-#[derive(Debug)]
-enum CustomError {
-    ReqwestError(reqwest::Error),
-    IoError(std::io::Error),
-}
-impl fmt::Display for CustomError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CustomError::ReqwestError(e) => write!(f, "Reqwest Error: {}", e),
-            CustomError::IoError(e) => write!(f, "IO Error: {}", e),
-        }
-    }
-}
 
 fn compute_sha256(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -74,12 +60,6 @@ struct ChunkInfo {
     file_id: String,
 }
 
-#[derive(Debug)]
-enum FileStatus {
-    AlreadyUploaded,
-    NotUploaded,
-    Error(CustomError),
-}
 
 async fn complete_upload(
     file_name: &str,
@@ -142,46 +122,6 @@ async fn upload_chunk(
     Ok(())
 }
 
-async fn is_file_uploaded(
-    api_key: &str,
-    _file_name: &str,
-    _file_size: &usize,
-    file_hash: &str,
-) -> FileStatus {
-    let url = format!(
-        "https://sdrive.app/api/v3/file-exists?key={}&file_hash={}",
-        api_key, file_hash
-    );
-
-    for attempt in 1..=MAX_RETRIES {
-        let response = reqwest::get(&url).await;
-        match response {
-            Ok(res) => match res.status() {
-                reqwest::StatusCode::OK => return FileStatus::AlreadyUploaded,
-                reqwest::StatusCode::NOT_FOUND => return FileStatus::NotUploaded,
-                _ => {
-                    eprintln!(
-                        "Attempt {}: Received unexpected status: {}",
-                        attempt,
-                        res.status()
-                    );
-                }
-            },
-            Err(e) => {
-                eprintln!("Attempt {}: Error: {}", attempt, e);
-                return FileStatus::Error(CustomError::ReqwestError(e));
-            }
-        }
-        if attempt < MAX_RETRIES {
-            sleep(Duration::from_secs(1)).await;
-        }
-    }
-    eprintln!("Unexpected state reached in is_file_uploaded");
-    FileStatus::Error(CustomError::IoError(io::Error::new(
-        io::ErrorKind::Other,
-        "Unexpected state in is_file_uploaded",
-    )))
-}
 
 async fn is_valid_api_key(api_key: &str) -> Result<bool, reqwest::Error> {
     let url = format!(
@@ -243,12 +183,6 @@ pub async fn upload_file(
         None => panic!("Failed to get the file name."),
     };
 
-    // Skip .DS_Store files
-    if file_name == ".DS_Store" {
-        println!("⏭️ Skipping .DS_Store file");
-        return Ok(());
-    }
-
     println!("🚀 Uploading {}", &file_name);
 
     let mut folder = parent_folder.display().to_string();
@@ -303,9 +237,9 @@ pub async fn upload_file(
     let file_size = file_content.len();
     let file_hash = compute_sha256_for_filename_size_and_content(file_path.to_str().unwrap())?;
 
-    let file_status = is_file_uploaded(&api_key, &file_name, &file_size, &file_hash).await;
+    let file_status = is_file_uploaded(&api_key, &user_guid, &file_hash).await;
     match file_status {
-        FileStatus::AlreadyUploaded => {
+        Ok(true) => {
             println!(
                 "\rYou have recently uploaded this file. Likely url: https://cdn.sdrive.pro/{}/{}",
                 user_guid, file_name
@@ -313,7 +247,7 @@ pub async fn upload_file(
             std::io::stdout().flush()?;
             return Ok(());
         }
-        FileStatus::NotUploaded => {
+        Ok(false) => {
             let file_guid = &file_hash[0..24].to_string();
             let chunk_size = 1048576; // 1MB
             let mut chunk_count = file_size / chunk_size + 1;
@@ -385,15 +319,18 @@ pub async fn upload_file(
                 std::io::stdout().flush()?;
                 return Ok(());
             }
-            let _response_hash = client
-                .post("https://upload.sdrive.app/api/v3/set-hash")
+            let response_hash = client
+                .post("https://backend.sdrive.app/set-hash")
+                .header("Authorization", format!("Bearer {}", api_key))
                 .json(&json!({
-                    "key": api_key,
-                    "file_hash": file_hash
+                    "userGuid": user_guid,
+                    "hash": file_hash
                 }))
                 .send()
                 .await?;
-            if response.status() == reqwest::StatusCode::ACCEPTED {
+            if response_hash.status() == reqwest::StatusCode::ACCEPTED {
+                let response_hash_text = &response_hash.text().await.unwrap_or_default();
+                println!("🔑 Hash set for file: {}. Hash response: {}", file_name, response_hash_text);
                 std::io::stdout().flush()?;
             }
             let _response_uploaded = client
@@ -414,7 +351,7 @@ pub async fn upload_file(
                 Err(e) => println!("Error: {}", e),
             }
         }
-        FileStatus::Error(e) => {
+        Err(e) => {
             return Err(anyhow::anyhow!(
                 "Unexpected state in is_file_uploaded: {}",
                 e
@@ -443,7 +380,7 @@ pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<(String, 
     println!("📂 Filstørrelse: {} bytes", file_path.metadata()?.len());
 
     // 🛡️ Krypter filen hvis ikke --unencrypted er satt
-    let (file_content, _nonce_b64, per_file_key_option) = if unencrypted {
+    let (file_content, _nonce_b64, _per_file_key_option) = if unencrypted {
         let content = tokio::fs::read(&file_path)
             .await
             .with_context(|| format!("❌ Kunne ikke lese filen: {:?}", file_path))?;
@@ -535,7 +472,13 @@ pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<(String, 
         let overwrite = true;
         let unencrypted = true;
         println!("💾 Uploading file to SDrive...");
-        //upload_file(file_path, parent_folder, unencrypted, overwrite).await?;
+        //sjekk om bruker har abonnement
+        let has_subscription = false;
+        if has_subscription {
+            upload_file(file_path, parent_folder, unencrypted, overwrite).await?;
+        } else {
+            println!("💸 You need an active subscription to upload files to the SDrive network.");
+        }
     }
 
     if !pin_response.status().is_success() {

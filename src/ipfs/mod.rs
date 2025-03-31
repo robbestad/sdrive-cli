@@ -1,28 +1,21 @@
 use crate::encryption::{decrypt_file, DecryptedData};
-use crate::server::Config;
+use crate::DownloadArgsStruct;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use reqwest::Client;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::time::{timeout, Duration};
 
-pub struct Args {
-    pub output: Option<PathBuf>,
-    pub key: Option<String>,
-    pub filename: String,
-    pub filepath: String,
-}
-
-pub async fn download_file(
-    client: &Client,
-    cid: &str,
-    args: &Args,
-    config: &Arc<Config>,
+pub async fn download_file_from_ipfs(
+    client: &reqwest::Client,
+    cid_or_iroh_link: &str,
+    args: &DownloadArgsStruct,
+    config: &Arc<crate::config::Config>,
 ) -> Result<Vec<u8>> {
+    let cid = cid_or_iroh_link;
     println!("🔑 CID: {}", cid);
     println!("🔑 Encryption key: {:?}", args.key);
     println!("🔑 Filename: {}", args.filename);
@@ -50,7 +43,7 @@ pub async fn download_file(
 
     let base_dir = PathBuf::from(&config.sync_dir);
     let temp_dir = base_dir.join("temp");
-    fs::create_dir_all(&temp_dir).await?; // Opprett temp-katalog hvis den ikke finnes
+    fs::create_dir_all(&temp_dir).await?;
 
     let temp_file = temp_dir.join(format!("download_{}_{}", cid, rand::random::<u64>()));
     let output_path = if !args.filepath.is_empty() {
@@ -64,6 +57,7 @@ pub async fn download_file(
     };
 
     let final_output_path = args.output.clone().unwrap_or(output_path);
+    let abs_output_path = std::path::absolute(&final_output_path)?;
     let key = args.key.clone().unwrap_or("".to_string());
     let data = if !key.is_empty() {
         if let Some(key) = &args.key {
@@ -110,36 +104,32 @@ pub async fn download_file(
                 }
             };
 
-            // Mellomlagring i temp
             fs::write(&temp_file, &plaintext).await?;
             println!("📥 Temporary file stored at {}", temp_file.display());
 
-            // Flytt til endelig plassering
-            if let Some(parent) = final_output_path.parent() {
+            if let Some(parent) = abs_output_path.parent() {
                 fs::create_dir_all(parent).await?;
             }
-            fs::rename(&temp_file, &final_output_path).await?;
+            fs::rename(&temp_file, &abs_output_path).await?;
             println!(
                 "✅ File downloaded and decrypted to {}",
-                final_output_path.display()
+                abs_output_path.display()
             );
             plaintext
         } else {
-            // Mellomlagring av kryptert fil
             fs::write(&temp_file, &encrypted_data).await?;
             println!("📥 Temporary file stored at {}", temp_file.display());
 
-            if let Some(parent) = final_output_path.parent() {
+            if let Some(parent) = abs_output_path.parent() {
                 fs::create_dir_all(parent).await?;
             }
             let decrypted: DecryptedData<Vec<u8>> = timeout(
                 Duration::from_secs(10),
-                decrypt_file(&temp_file, Some(&final_output_path)),
+                decrypt_file(&temp_file, Some(&abs_output_path)),
             )
             .await
             .map_err(|_| anyhow::anyhow!("Timeout waiting for master key decryption"))??;
 
-            // Slett temp-fil etter dekryptering
             fs::remove_file(&temp_file).await?;
             println!("🗑️ Temporary file removed: {}", temp_file.display());
 
@@ -147,7 +137,7 @@ pub async fn download_file(
                 DecryptedData::Raw(data) => {
                     println!(
                         "✅ File downloaded and decrypted with master key to {}",
-                        final_output_path.display()
+                        abs_output_path.display()
                     );
                     data
                 }
@@ -155,16 +145,14 @@ pub async fn download_file(
             }
         }
     } else {
-        // Mellomlagring av ukryptert fil
         fs::write(&temp_file, &encrypted_data).await?;
         println!("📥 Temporary file stored at {}", temp_file.display());
 
-        // Flytt til endelig plassering
-        if let Some(parent) = final_output_path.parent() {
+        if let Some(parent) = abs_output_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        fs::rename(&temp_file, &final_output_path).await?;
-        println!("✅ File downloaded to {}", final_output_path.display());
+        fs::rename(&temp_file, &abs_output_path).await?;
+        println!("✅ File downloaded to {}", abs_output_path.display());
         encrypted_data.to_vec()
     };
 

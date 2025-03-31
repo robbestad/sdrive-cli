@@ -18,6 +18,7 @@ pub enum Commands {
     },
     Upload(UploadArgs),
     Sync(SyncArgs),
+    Share(ShareArgs),
     Server,
     Download(DownloadArgs),
     Decrypt(DecryptArgs),
@@ -43,6 +44,12 @@ pub enum ConfigSubcommands {
     ImportKey {
         key: String,
     },
+}
+
+#[derive(Args)]
+pub struct ShareArgs {
+    #[clap(parse(from_os_str))]
+    pub path: PathBuf,
 }
 
 #[derive(Args)]

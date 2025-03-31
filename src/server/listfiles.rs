@@ -1,8 +1,8 @@
-use actix_web::HttpResponse;
-use serde::Serialize;
-use rusqlite::params;
-use actix_web::web;
 use crate::server::AppState;
+use actix_web::web;
+use actix_web::HttpResponse;
+use rusqlite::params;
+use serde::Serialize;
 
 #[derive(serde::Deserialize)]
 pub struct ListFilesQuery {
@@ -50,8 +50,12 @@ pub async fn list_files_handler(
         stmt.query_map(params![page_size as i64, offset as i64], map_row)
     } else {
         let like_pattern = format!("%{}%", filter_pattern);
-        stmt.query_map(params![like_pattern, page_size as i64, offset as i64], map_row)
-    }.map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+        stmt.query_map(
+            params![like_pattern, page_size as i64, offset as i64],
+            map_row,
+        )
+    }
+    .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
     let mut files = Vec::new();
     for file in file_iter {

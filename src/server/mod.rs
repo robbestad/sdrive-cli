@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 mod download;
 use actix_governor::{Governor, GovernorConfigBuilder};
 use download::{download_file, Args};
-use ignore::gitignore::GitignoreBuilder;
+use crate::file::is_ignored;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -111,30 +111,6 @@ pub async fn watch_directory(
     let public_path = sync_path.join("public");
     let private_path = sync_path.join("private");
 
-    let gitignore = {
-        let mut gitignore_builder = GitignoreBuilder::new(&sync_path);
-        let ignore_file = sync_path.join(".sdrive-ignore");
-
-        if ignore_file.exists() {
-            let contents = fs::read_to_string(&ignore_file).await.unwrap_or_default();
-            for line in contents.lines() {
-                if !line.trim().is_empty() && !line.starts_with('#') {
-                    gitignore_builder
-                        .add_line(None, line)
-                        .expect("Failed to add ignore pattern");
-                }
-            }
-        } else {
-            gitignore_builder
-                .add_line(None, ".DS_Store")
-                .expect("Failed to add default ignore");
-        }
-
-        gitignore_builder
-            .build()
-            .expect("Failed to build gitignore")
-    };
-
     loop {
         for (path, unencrypted) in [(public_path.clone(), true), (private_path.clone(), false)] {
             let mut dirs = vec![path];
@@ -145,10 +121,8 @@ pub async fn watch_directory(
                         while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
                             let file_path = entry.path();
 
-                            if gitignore
-                                .matched(&file_path, file_path.is_dir())
-                                .is_ignore()
-                            {
+                            if is_ignored(&sync_path, &file_path).await {
+                                println!("⏭️ Skipping ignored file: {}", &file_path.display());
                                 continue;
                             }
 
