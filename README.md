@@ -102,7 +102,7 @@ Uploads a file to SDrive with multiple layers of security:
 
 Options:
 - `--unencrypted`: Skip encryption for public files
-- `--overwrite`: Replace existing file on SDrive
+- `--overwrite`: Replace existing file 
 - `--config-path`: Use custom configuration file
 
 #### Share File (P2P)
@@ -196,6 +196,4 @@ See the LICENSE file for full details.
 For support, please:
 1. Check the documentation
 2. Enable debug logging
-3. Visit our [GitHub Issues](https://github.com/sdrive/sdrive-cli/issues)
-4. Contact support at support@sdrive.pro
 
