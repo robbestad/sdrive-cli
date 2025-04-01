@@ -42,6 +42,12 @@ pub fn normalize_path(path: &str) -> String {
         format!("/data/sdrive/public{}", &path[pos + 7..])
     } else if let Some(pos) = path.find("/private/") {
         format!("/data/sdrive/private{}", &path[pos + 8..])
+    } else if path.ends_with("/public") {
+        "/data/sdrive/public".to_string()
+    } else if path.ends_with("/private") {
+        "/data/sdrive/private".to_string()
+    } else if path == "/data/sdrive" {
+        "/".to_string()
     } else {
         path
     }
@@ -101,9 +107,13 @@ pub async fn update_directory(
         .to_string_lossy()
         .to_string();
     
-    let parent_path = path
-        .parent()
-        .map(|p| normalize_path(p.to_str().unwrap_or_default()));
+    let parent_path = if path_str == "/data/sdrive/public" || path_str == "/data/sdrive/private" {
+        Some("/".to_string())
+    } else {
+        path
+            .parent()
+            .map(|p| normalize_path(p.to_str().unwrap_or_default()))
+    };
 
     let modified = path
         .metadata()?
@@ -112,13 +122,9 @@ pub async fn update_directory(
         .as_secs();
 
     let db_conn_guard = db_conn.lock().await;
-    let parent_path = parent_path.unwrap_or_default();
-    let filepath_str = normalize_path(&path_str);
-    let parent_path_str = normalize_path(&parent_path);
-
     db_conn_guard.execute(
         "INSERT OR REPLACE INTO directories (path, name, parent_path, is_public, modified) VALUES (?, ?, ?, ?, ?)",
-        params![filepath_str, name, parent_path_str, is_public, modified],
+        params![path_str, name, parent_path, is_public, modified],
     )?;
 
     tracing::trace!("✅ Updated directory in database: {}", path_str);
@@ -131,6 +137,14 @@ pub async fn list_files_in_directory_handler(
 ) -> Result<HttpResponse, actix_web::Error> {
     let db_conn = state.db_conn.lock().await;
     let normalized_path = normalize_path(&query.path);
+    
+    // Hvis stien er root (/), returner en feil
+    if normalized_path == "/" {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "Cannot list contents of root directory"
+        })));
+    }
+    
     println!("🔍 Searching for files in directory: {}", normalized_path);
     
     let sql = "SELECT cid, filename, filepath, size, modified, is_directory 
