@@ -11,6 +11,7 @@ use crate::file::is_ignored;
 use crate::upload::pin_file;
 use anyhow::Result;
 use std::sync::Arc;
+use crate::server::directories::update_directory;
 
 #[derive(Serialize)]
 struct MetadataPayload {
@@ -84,6 +85,10 @@ pub async fn watch_directory(
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap()
                                     .as_secs();
+
+                                if let Err(e) = update_directory(db_conn, &file_path, unencrypted).await {
+                                    eprintln!("⚠️ Failed to update directory in database: {}", e);
+                                }
 
                                 let db_conn_guard = db_conn.lock().await;
                                 db_conn_guard.execute(

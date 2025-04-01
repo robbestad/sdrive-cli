@@ -19,6 +19,9 @@ pub struct Config {
 
     #[serde(default = "default_encryption_key")]
     pub encryption_key: String,
+
+    #[serde(default = "default_port")]
+    pub port: u16,
 }
 
 // Hjelpefunksjoner som henter verdier fra miljøvariabler
@@ -38,6 +41,13 @@ fn default_encryption_key() -> String {
     std::env::var("SDRIVE_ENCRYPTION_KEY").unwrap_or_default()
 }
 
+fn default_port() -> u16 {
+    std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(8081)
+}
+
 // Implementerer Default for å gi fornuftige standardverdier
 impl Default for Config {
     fn default() -> Self {
@@ -46,6 +56,7 @@ impl Default for Config {
             user_guid: default_user_guid(),
             sync_dir: default_sync_dir(),
             encryption_key: default_encryption_key(),
+            port: default_port(),
         }
     }
 }
@@ -124,6 +135,7 @@ pub async fn prompt_and_save_config(
             user_guid: String::new(),
             api_key: String::new(),
             encryption_key: String::new(),
+            port: 0,
         })
     } else {
         Config {
@@ -131,6 +143,7 @@ pub async fn prompt_and_save_config(
             user_guid: String::new(),
             api_key: String::new(),
             encryption_key: String::new(),
+            port: 0,
         }
     };
     let sync_dir = set_value(

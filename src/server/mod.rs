@@ -20,6 +20,8 @@ mod listfiles;
 use listfiles::list_files_handler;
 mod watch_directory;
 use watch_directory::watch_directory;
+mod directories;
+use directories::{list_directories_handler, setup_directories_table, list_files_in_directory_handler};
 
 
 #[derive(Clone)]
@@ -157,6 +159,8 @@ pub async fn start_server() -> Result<()> {
     let db_path = format!("{}/.sdrive.db", config.sync_dir);
     let db_conn = Connection::open(&db_path)
         .map_err(|e| anyhow::anyhow!("Failed to open SQLite database: {}", e))?;
+    
+    // Opprett tabeller
     db_conn.execute(
         "CREATE TABLE IF NOT EXISTS pinned_files (
             cid TEXT PRIMARY KEY,
@@ -169,6 +173,10 @@ pub async fn start_server() -> Result<()> {
         )",
         [],
     )?;
+
+    // Opprett mappe-tabell
+    setup_directories_table(&db_conn)?;
+
     let db_conn = Arc::new(Mutex::new(db_conn));
 
     let app_state = AppState {
@@ -203,6 +211,8 @@ pub async fn start_server() -> Result<()> {
         .unwrap();
 
     println!("🌏 Starting HTTP server...");
+    let port = app_state.config.port;
+    println!("📡 Binding to port: {}", port);
     let server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(app_state.clone()))
@@ -210,11 +220,11 @@ pub async fn start_server() -> Result<()> {
             .wrap(Logger::default())
             .wrap(
                 Cors::default()
-                    .allow_any_origin() // Tillater alle origins (kan være for avslappet for produksjon)
-                    .allowed_methods(vec!["GET", "POST"]) // Spesifiser tillatte HTTP-metoder
+                    .allow_any_origin()
+                    .allowed_methods(vec!["GET", "POST"])
                     .allowed_headers(vec![header::AUTHORIZATION, header::ACCEPT])
-                    .allow_any_header() // Tillater alle headere
-                    .max_age(3600), // Hvor lenge preflight-forespørsler caches (i sekunder)
+                    .allow_any_header()
+                    .max_age(3600),
             )
             .app_data(web::QueryConfig::default().error_handler(|err, _| {
                 actix_web::error::ErrorBadRequest(format!(
@@ -223,11 +233,26 @@ pub async fn start_server() -> Result<()> {
                 ))
             }))
             .route("/download/{cid}", web::get().to(download_handler))
-            .route("/listfiles", web::get().to(list_files_handler)) 
-
+            .route("/listfiles", web::get().to(list_files_handler))
+            .route("/directories", web::get().to(list_directories_handler))
+            .route("/directory/files", web::get().to(list_files_in_directory_handler))
     })
-    .bind("0.0.0.0:8081")?
-    .run();
+    .bind(format!("0.0.0.0:{}", port))
+    .map_err(|e| {
+        println!("❌ Failed to bind to port {}: {}", port, e);
+        e
+    })?;
+    
+    println!("✅ Server bound successfully, starting...");
+    println!("🚀 Server is now running on http://0.0.0.0:{}", port);
+    println!("📝 Available endpoints:");
+    println!("   - GET /download/{{cid}} - Download a file");
+    println!("   - GET /listfiles - List all files");
+    println!("   - GET /directories - List all directories");
+    println!("   - GET /directory/files?path=/path/to/dir - List files in directory");
+    println!("👀 Press Ctrl+C to stop the server");
+    
+    let server = server.run();
 
     tokio::select! {
         result = server => {
