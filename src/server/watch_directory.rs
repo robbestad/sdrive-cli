@@ -50,13 +50,122 @@ pub async fn watch_directory(
     pinned_cids: Arc<Mutex<HashMap<String, String>>>,
     db_conn: &Arc<Mutex<Connection>>,
     client: &Client,
-    config: &Config,
+    _config: &Config,
 ) {
     let sync_path = PathBuf::from(sync_dir);
     let public_path = sync_path.join("public");
     let private_path = sync_path.join("private");
 
+    println!("📂 Sync path: {}", sync_path.display());
+    println!("📂 Public path: {}", public_path.display());
+    println!("📂 Private path: {}", private_path.display());
+
     loop {
+        // Først sjekk etter slettede filer og mapper
+        let mut deleted_files = Vec::new();
+        let mut deleted_dirs = Vec::new();
+
+        // Hent alle filer fra databasen
+        {
+            let db_conn_guard = db_conn.lock().await;
+            let mut stmt = db_conn_guard
+                .prepare("SELECT cid, filepath FROM pinned_files")
+                .unwrap();
+            let files: Vec<(String, String)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            // Sjekk hver fil
+            for (cid, filepath) in files {
+                let local_path = PathBuf::from(filepath.replace("/data/sdrive", sync_dir));
+
+                println!("🔍 Checking file existence:");
+                println!("   Database path: {}", filepath);
+                println!("   Local path: {}", local_path.display());
+                let canonical_path = local_path.canonicalize().unwrap_or(local_path.clone());
+                println!("   Absolute path: {}", canonical_path.display());
+                
+                if !local_path.exists() {
+                    println!("❌ File not found: {}", local_path.display());
+                    deleted_files.push((cid, filepath));
+                } else {
+                    println!("✅ File exists: {}", local_path.display());
+                }
+            }
+        }
+
+        // Hent alle mapper fra databasen
+        {
+            let db_conn_guard = db_conn.lock().await;
+            let mut stmt = db_conn_guard
+                .prepare("SELECT path FROM directories")
+                .unwrap();
+            let dirs: Vec<String> = stmt
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            // Sjekk hver mappe
+            for dirpath in dirs {
+                let local_path = PathBuf::from(dirpath.replace("/data/sdrive", sync_dir));
+
+                let canonical_path = local_path.canonicalize().unwrap_or(local_path.clone());
+                tracing::trace!("🔍 Checking directory existence:");
+                tracing::trace!("   Database path: {}", dirpath);
+                tracing::trace!("   Local path: {}", local_path.display());
+                tracing::trace!("   Absolute path: {}", canonical_path.display());
+                
+                if !local_path.exists() {
+                    tracing::info!("❌ Directory not found: {}", local_path.display());
+                    deleted_dirs.push(dirpath);
+                } else {
+                    tracing::info!("✅ Directory exists: {}", local_path.display());
+                }
+            }
+        }
+
+        // Håndter slettede filer
+        for (cid, filepath) in deleted_files {
+            println!("🗑️ Found deleted file: {}", filepath);
+            
+            // Unpin fra IPFS
+            if let Err(e) = client
+                .post("http://127.0.0.1:5002/api/v0/pin/rm")
+                .query(&[("arg", &cid)])
+                .send()
+                .await
+            {
+                eprintln!("⚠️ Failed to unpin file from IPFS: {}", e);
+            }
+
+            // Fjern fra databasen
+            let db_conn_guard = db_conn.lock().await;
+            if let Err(e) = db_conn_guard.execute(
+                "DELETE FROM pinned_files WHERE filepath = ?",
+                params![filepath],
+            ) {
+                eprintln!("⚠️ Failed to remove file from database: {}", e);
+            }
+        }
+
+        // Håndter slettede mapper
+        for dirpath in deleted_dirs {
+            println!("🗑️ Found deleted directory: {}", dirpath);
+            
+            // Fjern fra databasen
+            let db_conn_guard = db_conn.lock().await;
+            if let Err(e) = db_conn_guard.execute(
+                "DELETE FROM directories WHERE path = ?",
+                params![dirpath],
+            ) {
+                eprintln!("⚠️ Failed to remove directory from database: {}", e);
+            }
+        }
+
+        // Fortsett med normal overvåking av mapper
         for (path, unencrypted) in [(public_path.clone(), true), (private_path.clone(), false)] {
             let mut dirs = vec![path];
 
@@ -65,16 +174,17 @@ pub async fn watch_directory(
                     Ok(mut entries) => {
                         // Først sjekk om mappen eksisterer i databasen
                         let current_dir_str = normalize_path(&current_dir.to_string_lossy());
-                        let db_conn_guard = db_conn.lock().await;
-                        let dir_exists = db_conn_guard
-                            .query_row(
-                                "SELECT COUNT(*) FROM directories WHERE path = ?",
-                                params![current_dir_str],
-                                |row| row.get::<_, i32>(0),
-                            )
-                            .map(|count| count > 0)
-                            .unwrap_or(false);
-                        drop(db_conn_guard);
+                        let dir_exists = {
+                            let db_conn_guard = db_conn.lock().await;
+                            db_conn_guard
+                                .query_row(
+                                    "SELECT COUNT(*) FROM directories WHERE path = ?",
+                                    params![current_dir_str],
+                                    |row| row.get::<_, i32>(0),
+                                )
+                                .map(|count| count > 0)
+                                .unwrap_or(false)
+                        };
 
                         // Hvis mappen ikke eksisterer, legg den til
                         if !dir_exists {
@@ -87,7 +197,7 @@ pub async fn watch_directory(
                             let file_path = entry.path();
 
                             if is_ignored(&sync_path, &file_path).await {
-                                println!("⏭️ Skipping ignored file: {}", &file_path.display());
+                                tracing::trace!("⏭️ Skipping ignored file: {}", &file_path.display());
                                 continue;
                             }
 
@@ -112,11 +222,13 @@ pub async fn watch_directory(
                                     eprintln!("⚠️ Failed to update directory in database: {}", e);
                                 }
 
-                                let db_conn_guard = db_conn.lock().await;
-                                db_conn_guard.execute(
-                                    "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, size, modified, is_directory) VALUES (?, ?, ?, ?, ?, ?)",
-                                    params!["", filename, filepath_str, 0, modified, true],
-                                ).unwrap();
+                                {
+                                    let db_conn_guard = db_conn.lock().await;
+                                    db_conn_guard.execute(
+                                        "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, size, modified, is_directory) VALUES (?, ?, ?, ?, ?, ?)",
+                                        params!["", filename, filepath_str, 0, modified, true],
+                                    ).unwrap();
+                                }
                                 
                                 continue;
                             }
@@ -127,15 +239,17 @@ pub async fn watch_directory(
                             }
 
                             let filepath_str = normalize_path(&file_path.to_string_lossy());
-                            let db_conn_guard = db_conn.lock().await;
-                            let exists = db_conn_guard
-                                .query_row(
-                                    "SELECT COUNT(*) FROM pinned_files WHERE filepath = ?",
-                                    params![filepath_str],
-                                    |row| row.get::<_, i32>(0),
-                                )
-                                .map(|count| count > 0)
-                                .unwrap_or(false);
+                            let exists = {
+                                let db_conn_guard = db_conn.lock().await;
+                                db_conn_guard
+                                    .query_row(
+                                        "SELECT COUNT(*) FROM pinned_files WHERE filepath = ?",
+                                        params![filepath_str],
+                                        |row| row.get::<_, i32>(0),
+                                    )
+                                    .map(|count| count > 0)
+                                    .unwrap_or(false)
+                            };
 
                             if exists {
                                 println!("📂 Ignored duplicate file: {:?}", file_path);
@@ -164,10 +278,13 @@ pub async fn watch_directory(
                                         .unwrap()
                                         .as_secs();
 
-                                    db_conn_guard.execute(
-                                        "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, file_key, size, modified, is_directory) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                        params![cid, filename, filepath_str, file_key, size, modified, false],
-                                    ).unwrap();
+                                    {
+                                        let db_conn_guard = db_conn.lock().await;
+                                        db_conn_guard.execute(
+                                            "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, file_key, size, modified, is_directory) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                            params![cid, filename, filepath_str, file_key, size, modified, false],
+                                        ).unwrap();
+                                    }
 
                                     if let Err(e) = store_metadata_global(
                                         client,
