@@ -49,7 +49,7 @@ pub async fn download_file(
     println!("📏 Encrypted data length: {}", encrypted_data.len());
 
     let base_dir = PathBuf::from(&config.sync_dir);
-    let temp_dir = base_dir.join("temp");
+    let temp_dir = base_dir.join(".temp");
     fs::create_dir_all(&temp_dir).await?; // Opprett temp-katalog hvis den ikke finnes
 
     let temp_file = temp_dir.join(format!("download_{}_{}", cid, rand::random::<u64>()));
@@ -60,7 +60,7 @@ pub async fn download_file(
             base_dir.join(&args.filepath)
         }
     } else {
-        base_dir.join(&args.filename)
+        temp_dir.join(&args.filename)
     };
 
     let final_output_path = args.output.clone().unwrap_or(output_path);
