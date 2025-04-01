@@ -109,7 +109,8 @@ async fn download_handler(
         }
     };
 
-    let key = query.key.clone(); // Use query key if provided, else None
+    // Bruk file_key fra databasen hvis ingen key er sendt i query
+    let key = query.key.clone().or(file_key.clone());
 
     println!("🔍 Received key in handler: {:?}", query.key);
     println!("🔍 DB key: {:?}", file_key);
@@ -124,7 +125,7 @@ async fn download_handler(
     let args = Args {
         output: None,
         key,
-        filename: cid.to_string(),
+        filename: filename.clone(), // Bruk originalt filnavn
         filepath: query.filepath.clone().unwrap_or_default(),
     };
 

@@ -45,9 +45,9 @@ pub async fn list_files_handler(
     let db_conn = state.db_conn.lock().await;
 
     let mut stmt = if filter_pattern.is_empty() {
-        db_conn.prepare("SELECT cid, filename, filepath, size, modified, is_directory FROM pinned_files LIMIT ? OFFSET ?")
+        db_conn.prepare("SELECT cid, filename, filepath, file_key, size, modified, is_directory FROM pinned_files LIMIT ? OFFSET ?")
     } else {
-        db_conn.prepare("SELECT cid, filename, filepath, size, modified, is_directory FROM pinned_files WHERE filename LIKE ? LIMIT ? OFFSET ?")
+        db_conn.prepare("SELECT cid, filename, filepath, file_key, size, modified, is_directory FROM pinned_files WHERE filename LIKE ? LIMIT ? OFFSET ?")
     }.map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
     let row_mapper = |row: &rusqlite::Row| map_row(row);

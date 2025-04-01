@@ -147,7 +147,7 @@ pub async fn list_files_in_directory_handler(
     
     tracing::trace!("🔍 Searching for files in directory: {}", normalized_path);
     
-    let sql = "SELECT cid, filename, filepath, size, modified, is_directory 
+    let sql = "SELECT cid, filename, filepath, size, modified, is_directory, file_key
                FROM pinned_files 
                WHERE filepath LIKE ? || '/%' 
                AND filepath NOT LIKE ? || '/%/%' 

@@ -385,6 +385,7 @@ pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<(String, 
             .await
             .with_context(|| format!("❌ Kunne ikke lese filen: {:?}", file_path))?;
         println!("✅ Fil lest (ukryptert): {} bytes", content.len());
+        file_key = "".to_string(); // Sett file_key til tom streng for ukrypterte filer
         (content, "".to_string(), None)
     } else {
         println!("🔐 Starter kryptering av fil...");

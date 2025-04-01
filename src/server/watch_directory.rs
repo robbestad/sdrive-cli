@@ -322,6 +322,7 @@ pub async fn watch_directory(
                                             "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, file_key, size, modified, is_directory) VALUES (?, ?, ?, ?, ?, ?, ?)",
                                             params![cid, filename, filepath_str, file_key, size, modified, false],
                                         ).unwrap();
+                                        println!("✅ Lagret file_key i databasen: {}", file_key);
                                     }
 
                                     if let Err(e) = store_metadata_global(
