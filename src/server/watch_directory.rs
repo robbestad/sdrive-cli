@@ -22,6 +22,34 @@ struct MetadataPayload {
     filepath: String,
 }
 
+#[derive(Serialize)]
+struct UnpinPayload {
+    cid: String,
+    user_guid: String,
+}
+
+async fn unpin_file_remote(cid: String, config: &Config) -> Result<()> {
+    let client = Client::new();
+    let url = format!("https://backend.sdrive.app/unpin");
+    let payload = UnpinPayload {
+        cid,
+        user_guid: config.user_guid.clone(),
+    };
+    
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .json(&payload)
+        .send()
+        .await?;
+    
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!("Failed to unpin file: {}", response.status()));
+    }
+    
+    Ok(())
+}
+
 async fn store_metadata_global(
     client: &Client,
     cid: String,
@@ -81,17 +109,17 @@ pub async fn watch_directory(
             for (cid, filepath) in files {
                 let local_path = PathBuf::from(filepath.replace("/data/sdrive", sync_dir));
 
-                println!("🔍 Checking file existence:");
-                println!("   Database path: {}", filepath);
-                println!("   Local path: {}", local_path.display());
+                tracing::trace!("🔍 Checking file existence:");
+                tracing::trace!("   Database path: {}", filepath);
+                tracing::trace!("   Local path: {}", local_path.display());
                 let canonical_path = local_path.canonicalize().unwrap_or(local_path.clone());
-                println!("   Absolute path: {}", canonical_path.display());
+                tracing::trace!("   Absolute path: {}", canonical_path.display());
                 
                 if !local_path.exists() {
-                    println!("❌ File not found: {}", local_path.display());
+                    tracing::info!("❌ File not found: {}", local_path.display());
                     deleted_files.push((cid, filepath));
                 } else {
-                    println!("✅ File exists: {}", local_path.display());
+                    tracing::info!("✅ File exists: {}", local_path.display());
                 }
             }
         }
@@ -139,6 +167,16 @@ pub async fn watch_directory(
                 .await
             {
                 eprintln!("⚠️ Failed to unpin file from IPFS: {}", e);
+            }
+
+            // Unpin fra SDrive IPFS hvis abonnement er aktivt
+            let has_subscription = false;
+            if has_subscription {
+                if let Err(e) = unpin_file_remote(cid, _config).await {
+                    eprintln!("⚠️ Failed to unpin file from SDrive network: {}", e);
+                }
+            } else {
+                println!("💸 You need an active subscription to unpin files from the SDrive network.");
             }
 
             // Fjern fra databasen
@@ -252,7 +290,7 @@ pub async fn watch_directory(
                             };
 
                             if exists {
-                                println!("📂 Ignored duplicate file: {:?}", file_path);
+                                tracing::trace!("📂 Ignored duplicate file: {:?}", file_path);
                                 uploaded_files_guard.insert(file_path.clone());
                                 continue;
                             }
