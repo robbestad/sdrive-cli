@@ -262,10 +262,12 @@ pub async fn watch_directory(
 
                                 {
                                     let db_conn_guard = db_conn.lock().await;
-                                    db_conn_guard.execute(
+                                    if let Err(e) = db_conn_guard.execute(
                                         "INSERT OR REPLACE INTO pinned_files (cid, filename, filepath, size, modified, is_directory) VALUES (?, ?, ?, ?, ?, ?)",
                                         params!["", filename, filepath_str, 0, modified, true],
-                                    ).unwrap();
+                                    ) {
+                                        eprintln!("⚠️ Failed to insert directory into database: {}", e);
+                                    }
                                 }
                                 
                                 continue;

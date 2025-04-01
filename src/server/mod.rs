@@ -22,14 +22,16 @@ mod watch_directory;
 use watch_directory::watch_directory;
 mod directories;
 use directories::{list_directories_handler, setup_directories_table, list_files_in_directory_handler};
-
+mod iroh;
+use iroh::{ActiveShares, start_share_handler, list_shares_handler, stop_share_handler};
 
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     client: Client,
     config: Arc<Config>,
     db_conn: Arc<Mutex<Connection>>,
     pinned_cids: Arc<Mutex<HashMap<String, String>>>,
+    active_shares: Arc<Mutex<ActiveShares>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -74,8 +76,6 @@ pub async fn setup_directories(config: &Arc<Config>) -> Result<()> {
 
     Ok(())
 }
-
-
 
 async fn download_handler(
     cid: web::Path<String>,
@@ -165,6 +165,7 @@ pub async fn start_server() -> Result<()> {
     let uploaded_files = Arc::new(Mutex::new(HashSet::new()));
     let pinned_cids = Arc::new(Mutex::new(HashMap::new()));
     let client = Client::new();
+    let active_shares = Arc::new(Mutex::new(ActiveShares::new()));
 
     let db_path = format!("{}/.sdrive.db", config.sync_dir);
     let db_conn = Connection::open(&db_path)
@@ -194,6 +195,7 @@ pub async fn start_server() -> Result<()> {
         config: Arc::new(config.clone()),
         db_conn,
         pinned_cids: pinned_cids.clone(),
+        active_shares: active_shares.clone(),
     };
 
     let watcher_handle = tokio::spawn({
@@ -247,6 +249,9 @@ pub async fn start_server() -> Result<()> {
             .route("/listfiles", web::get().to(list_files_handler))
             .route("/directories", web::get().to(list_directories_handler))
             .route("/directory/files", web::get().to(list_files_in_directory_handler))
+            .route("/share", web::post().to(start_share_handler))
+            .route("/shares", web::get().to(list_shares_handler))
+            .route("/share/stop", web::post().to(stop_share_handler))
     })
     .bind(format!("0.0.0.0:{}", port))
     .map_err(|e| {
@@ -261,6 +266,9 @@ pub async fn start_server() -> Result<()> {
     println!("   - GET /listfiles - List all files");
     println!("   - GET /directories - List all directories");
     println!("   - GET /directory/files?path=/path/to/dir - List files in directory");
+    println!("   - POST /share - Start sharing a file/directory with Iroh");
+    println!("   - GET /shares - List active Iroh shares");
+    println!("   - POST /share/stop - Stop an active Iroh share");
     println!("👀 Press Ctrl+C to stop the server");
     
     let server = server.run();
