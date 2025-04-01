@@ -82,20 +82,23 @@ async fn download_handler(
     query: web::Query<DownloadQuery>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, actix_web::Error> {
+    // Fjern eventuell "cid=" prefiks hvis den finnes
+    let cid = cid.trim_start_matches("cid=");
+    
     if cid.is_empty() {
         return Ok(HttpResponse::BadRequest()
             .body("❌ CID er påkrevd. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1"));
     }
 
     let pinned_cids = state.pinned_cids.lock().await;
-    let _filename_from_cache = pinned_cids.get(&cid.to_string()).cloned();
+    let _filename_from_cache = pinned_cids.get(cid).cloned();
     drop(pinned_cids);
 
     let db_conn = state.db_conn.lock().await;
     let mut stmt = db_conn
         .prepare("SELECT filename, file_key FROM pinned_files WHERE cid = ?")
         .unwrap();
-    let (filename, file_key) = match stmt.query_row(params![cid.to_string()], |row| {
+    let (filename, file_key) = match stmt.query_row(params![cid], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
     }) {
         Ok((filename, file_key)) => (filename, file_key),
@@ -125,7 +128,7 @@ async fn download_handler(
         filepath: query.filepath.clone().unwrap_or_default(),
     };
 
-    match download_file(&state.client, &cid, &args, &state.config).await {
+    match download_file(&state.client, cid, &args, &state.config).await {
         Ok(data) => {
             let filename = if !args.filepath.is_empty() {
                 args.filepath.clone()
