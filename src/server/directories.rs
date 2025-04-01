@@ -23,6 +23,7 @@ pub struct FileInDirectory {
     pub size: i64,
     pub modified: i64,
     pub is_directory: bool,
+    pub file_key: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -175,6 +176,7 @@ pub async fn list_files_in_directory_handler(
                 size: row.get(3)?,
                 modified: row.get(4)?,
                 is_directory: row.get(5)?,
+                file_key: row.get(6)?,
             })
         })
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?
