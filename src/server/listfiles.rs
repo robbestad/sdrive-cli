@@ -18,6 +18,7 @@ struct FileEntry {
     size: u64,
     modified: i64,
     filename: String,
+    file_key: String,
     filepath: String,
     is_directory: bool,
 }
@@ -27,9 +28,10 @@ fn map_row(row: &rusqlite::Row) -> Result<FileEntry, rusqlite::Error> {
         cid: row.get(0)?,
         filename: row.get(1)?,
         filepath: normalize_path(&row.get::<_, String>(2)?),
-        size: row.get(3)?,
-        modified: row.get(4)?,
-        is_directory: row.get(5)?,
+        file_key: row.get(3)?,
+        size: row.get(4)?,
+        modified: row.get(5)?,
+        is_directory: row.get(6)?,
     })
 }
 
