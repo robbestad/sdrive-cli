@@ -12,6 +12,8 @@ use crate::upload::pin_file;
 use anyhow::Result;
 use std::sync::Arc;
 use crate::server::directories::update_directory;
+use crate::config::Config;
+use crate::server::directories::normalize_path;
 
 #[derive(Serialize)]
 struct MetadataPayload {
@@ -48,6 +50,7 @@ pub async fn watch_directory(
     pinned_cids: Arc<Mutex<HashMap<String, String>>>,
     db_conn: &Arc<Mutex<Connection>>,
     client: &Client,
+    config: &Config,
 ) {
     let sync_path = PathBuf::from(sync_dir);
     let public_path = sync_path.join("public");
@@ -60,6 +63,26 @@ pub async fn watch_directory(
             while let Some(current_dir) = dirs.pop() {
                 match fs::read_dir(&current_dir).await {
                     Ok(mut entries) => {
+                        // Først sjekk om mappen eksisterer i databasen
+                        let current_dir_str = normalize_path(&current_dir.to_string_lossy());
+                        let db_conn_guard = db_conn.lock().await;
+                        let dir_exists = db_conn_guard
+                            .query_row(
+                                "SELECT COUNT(*) FROM directories WHERE path = ?",
+                                params![current_dir_str],
+                                |row| row.get::<_, i32>(0),
+                            )
+                            .map(|count| count > 0)
+                            .unwrap_or(false);
+                        drop(db_conn_guard);
+
+                        // Hvis mappen ikke eksisterer, legg den til
+                        if !dir_exists {
+                            if let Err(e) = update_directory(db_conn, &current_dir, unencrypted).await {
+                                eprintln!("⚠️ Failed to update directory in database: {}", e);
+                            }
+                        }
+
                         while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
                             let file_path = entry.path();
 
@@ -71,7 +94,7 @@ pub async fn watch_directory(
                             if file_path.is_dir() {
                                 dirs.push(file_path.clone());
                                 
-                                let filepath_str = file_path.to_string_lossy().to_string();
+                                let filepath_str = normalize_path(&file_path.to_string_lossy());
                                 let filename = file_path
                                     .file_name()
                                     .unwrap()
@@ -85,7 +108,6 @@ pub async fn watch_directory(
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap()
                                     .as_secs();
-
                                 if let Err(e) = update_directory(db_conn, &file_path, unencrypted).await {
                                     eprintln!("⚠️ Failed to update directory in database: {}", e);
                                 }
@@ -104,7 +126,7 @@ pub async fn watch_directory(
                                 continue;
                             }
 
-                            let filepath_str = file_path.to_string_lossy().to_string();
+                            let filepath_str = normalize_path(&file_path.to_string_lossy());
                             let db_conn_guard = db_conn.lock().await;
                             let exists = db_conn_guard
                                 .query_row(

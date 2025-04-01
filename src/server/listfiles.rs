@@ -3,6 +3,7 @@ use actix_web::web;
 use actix_web::HttpResponse;
 use rusqlite::params;
 use serde::Serialize;
+use crate::server::directories::normalize_path;
 
 #[derive(serde::Deserialize)]
 pub struct ListFilesQuery {
@@ -25,15 +26,16 @@ fn map_row(row: &rusqlite::Row) -> Result<FileEntry, rusqlite::Error> {
     Ok(FileEntry {
         cid: row.get(0)?,
         filename: row.get(1)?,
-        filepath: row.get(2)?,
+        filepath: normalize_path(&row.get::<_, String>(2)?),
         size: row.get(3)?,
         modified: row.get(4)?,
         is_directory: row.get(5)?,
     })
 }
+
 pub async fn list_files_handler(
     query: web::Query<ListFilesQuery>,
-    state: web::Data<AppState>,
+    state: web::Data<AppState>
 ) -> Result<HttpResponse, actix_web::Error> {
     let page = query.page.unwrap_or(1);
     let page_size = query.page_size.unwrap_or(20);
@@ -48,13 +50,14 @@ pub async fn list_files_handler(
         db_conn.prepare("SELECT cid, filename, filepath, size, modified, is_directory FROM pinned_files WHERE filename LIKE ? LIMIT ? OFFSET ?")
     }.map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
+    let row_mapper = |row: &rusqlite::Row| map_row(row);
     let file_iter = if filter_pattern.is_empty() {
-        stmt.query_map(params![page_size as i64, offset as i64], map_row)
+        stmt.query_map(params![page_size as i64, offset as i64], &row_mapper)
     } else {
         let like_pattern = format!("%{}%", filter_pattern);
         stmt.query_map(
             params![like_pattern, page_size as i64, offset as i64],
-            map_row,
+            &row_mapper,
         )
     }
     .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;

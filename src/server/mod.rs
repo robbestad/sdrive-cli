@@ -199,6 +199,7 @@ pub async fn start_server() -> Result<()> {
                 pinned_cids,
                 &db_conn,
                 &client,
+                &config
             )
             .await;
         }
