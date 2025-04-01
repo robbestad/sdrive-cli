@@ -1,5 +1,5 @@
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use anyhow::{Context, Result};
+use actix_web::{web, HttpResponse, Responder};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -8,26 +8,14 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::task::JoinHandle;
-use uuid::Uuid;
 
-// Her importeres nødvendige moduler fra iroh- og iroh_blobs-pakken
-use iroh::{
-    discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
-    Endpoint,
-    RelayMode,
-    SecretKey,
-};
+use iroh::Endpoint;
 use iroh_blobs::{
-    get::db::DownloadProgress,
-    provider::CustomEventSender,
-    store::{ExportMode, ImportMode, mem::Store},
+    store::mem::Store,
     ticket::BlobTicket,
-    BlobFormat, Hash,
 };
-use rand::Rng;
 use crate::server::AppState;
 
-// Denne strukturen representerer de nødvendige argumentene for sending.
 #[derive(Debug)]
 struct SendArgs {
     path: PathBuf,
@@ -46,6 +34,7 @@ struct ShareInfo {
     start_time: u64,
     handle: JoinHandle<()>,
     router: Arc<iroh::protocol::Router>,
+    #[allow(dead_code)]
     blobs: Arc<iroh_blobs::net_protocol::Blobs<Store>>,
 }
 
@@ -61,8 +50,6 @@ struct TicketResponse {
     ticket: String,
 }
 
-/// Applikasjonsstate for å holde oversikt over aktive delinger.
-/// Hver deling identifiseres med en ticket (String) og tilknyttet en bakgrunnsoppgave.
 #[derive(Clone)]
 pub struct ActiveShares {
     active_shares: Arc<Mutex<HashMap<String, ShareInfo>>>,
@@ -147,12 +134,12 @@ pub async fn stop_share_handler(
     req: web::Json<StopRequest>,
 ) -> impl Responder {
     let ticket = req.ticket.clone();
-    let mut active_shares = state.active_shares.lock().await;
+    let active_shares = state.active_shares.lock().await;
     let mut shares = active_shares.active_shares.lock().unwrap();
     if let Some(info) = shares.remove(&ticket) {
         info.handle.abort();
         // Stopp Iroh-noden
-        info.router.shutdown().await;
+        let _ = info.router.shutdown().await;
         HttpResponse::Ok().body(format!("Deling med ticket {} stoppet", ticket))
     } else {
         HttpResponse::NotFound().body("Fant ingen aktiv deling med denne ticketen")

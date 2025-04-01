@@ -370,6 +370,7 @@ pub async fn pin_file(file_path: PathBuf, unencrypted: bool) -> Result<(String, 
         .map(|name| name.to_string_lossy().to_string())
         .context("❌ Kunne ikke hente filnavn")?;
 
+    #[allow(unused)]
     let mut file_key = "".to_string();
     println!("📌 Pinning lokalt i IPFS: {}", &file_name);
 
