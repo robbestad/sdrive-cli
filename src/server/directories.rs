@@ -145,7 +145,7 @@ pub async fn list_files_in_directory_handler(
         })));
     }
     
-    println!("🔍 Searching for files in directory: {}", normalized_path);
+    tracing::trace!("🔍 Searching for files in directory: {}", normalized_path);
     
     let sql = "SELECT cid, filename, filepath, size, modified, is_directory 
                FROM pinned_files 
@@ -154,8 +154,8 @@ pub async fn list_files_in_directory_handler(
                AND is_directory = 0
                ORDER BY filename";
     
-    println!("📝 SQL Query: {}", sql);
-    println!("🔑 Parameters: pattern={}, subdir_pattern={}", 
+    tracing::trace!("📝 SQL Query: {}", sql);
+    tracing::trace!("🔑 Parameters: pattern={}, subdir_pattern={}", 
         format!("{}%", normalized_path),
         format!("{}/%", normalized_path)
     );
@@ -181,9 +181,9 @@ pub async fn list_files_in_directory_handler(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
-    println!("📂 Found {} files in directory", files.len());
+    tracing::trace!("📂 Found {} files in directory", files.len());
     for file in &files {
-        println!("   - {} ({})", file.filename, file.filepath);
+        tracing::trace!("   - {} ({})", file.filename, file.filepath);
     }
     
     Ok(HttpResponse::Ok().json(files))
