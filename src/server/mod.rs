@@ -112,6 +112,12 @@ async fn download_handler(
     println!("🔍 DB key: {:?}", file_key);
     println!("🔍 Using key (from query or DB): {:?}", key);
 
+    // Opprett temp-mappe hvis den ikke finnes
+    let temp_dir = PathBuf::from(&state.config.sync_dir).join("temp");
+    if let Err(e) = fs::create_dir_all(&temp_dir).await {
+        return Ok(HttpResponse::InternalServerError().body(format!("❌ Failed to create temp directory: {}", e)));
+    }
+
     let args = Args {
         output: None,
         key,
