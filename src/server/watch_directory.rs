@@ -292,8 +292,99 @@ pub async fn watch_directory(
                             };
 
                             if exists {
-                                tracing::trace!("📂 Ignored duplicate file: {:?}", file_path);
-                                uploaded_files_guard.insert(file_path.clone());
+                                // Sjekk om filen har blitt endret
+                                let current_modified = file_path
+                                    .metadata()
+                                    .unwrap()
+                                    .modified()
+                                    .unwrap()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs();
+
+                                let db_conn_guard = db_conn.lock().await;
+                                let old_modified: i64 = db_conn_guard
+                                    .query_row(
+                                        "SELECT modified FROM pinned_files WHERE filepath = ?",
+                                        params![filepath_str],
+                                        |row| row.get(0),
+                                    )
+                                    .unwrap();
+
+                                if current_modified as i64 > old_modified {
+                                    println!("📝 File has been modified: {:?}", file_path);
+                                    
+                                    // Hent gammel CID
+                                    let old_cid: String = db_conn_guard
+                                        .query_row(
+                                            "SELECT cid FROM pinned_files WHERE filepath = ?",
+                                            params![filepath_str],
+                                            |row| row.get(0),
+                                        )
+                                        .unwrap();
+
+                                    // Unpin gammel versjon
+                                    if let Err(e) = client
+                                        .post("http://127.0.0.1:5002/api/v0/pin/rm")
+                                        .query(&[("arg", &old_cid)])
+                                        .send()
+                                        .await
+                                    {
+                                        eprintln!("⚠️ Failed to unpin old version from IPFS: {}", e);
+                                    }
+
+                                    // Unpin fra SDrive IPFS hvis abonnement er aktivt
+                                    let has_subscription = false;
+                                    if has_subscription {
+                                        if let Err(e) = unpin_file_remote(old_cid, _config).await {
+                                            eprintln!("⚠️ Failed to unpin old version from SDrive network: {}", e);
+                                        }
+                                    }
+
+                                    // Pin ny versjon
+                                    match pin_file(file_path.clone(), unencrypted).await {
+                                        Ok((new_cid, file_key)) => {
+                                            println!("✅ Successfully uploaded new version: {:?}", file_path);
+                                            let filename = file_path
+                                                .file_name()
+                                                .unwrap()
+                                                .to_string_lossy()
+                                                .to_string();
+                                            let size = file_path.metadata().unwrap().len();
+
+                                            // Oppdater databasen
+                                            let db_conn_guard = db_conn.lock().await;
+                                            if let Err(e) = db_conn_guard.execute(
+                                                "UPDATE pinned_files SET cid = ?, file_key = ?, size = ?, modified = ? WHERE filepath = ?",
+                                                params![new_cid, file_key, size, current_modified, filepath_str],
+                                            ) {
+                                                eprintln!("⚠️ Failed to update file in database: {}", e);
+                                            }
+
+                                            // Oppdater metadata globalt
+                                            if let Err(e) = store_metadata_global(
+                                                client,
+                                                new_cid.clone(),
+                                                filename.clone(),
+                                                filepath_str.clone(),
+                                            )
+                                            .await
+                                            {
+                                                eprintln!("⚠️ Failed to store metadata globally: {}", e);
+                                            }
+
+                                            let mut pinned_cids_guard = pinned_cids.lock().await;
+                                            pinned_cids_guard.insert(new_cid.clone(), filename.clone());
+                                            println!(
+                                                "✅ Updated CID in cache and DB: {} with name {}",
+                                                new_cid, filename
+                                            );
+                                        }
+                                        Err(e) => {
+                                            eprintln!("❌ Failed to upload new version of file {:?}: {}", file_path, e);
+                                        }
+                                    }
+                                }
                                 continue;
                             }
 

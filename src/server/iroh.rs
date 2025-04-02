@@ -8,6 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::task::JoinHandle;
+use tokio::sync::Mutex as TokioMutex;
 
 use iroh::Endpoint;
 use iroh_blobs::{
@@ -52,13 +53,13 @@ struct TicketResponse {
 
 #[derive(Clone)]
 pub struct ActiveShares {
-    active_shares: Arc<Mutex<HashMap<String, ShareInfo>>>,
+    shares: Arc<TokioMutex<HashMap<String, ShareInfo>>>,
 }
 
 impl ActiveShares {
     pub fn new() -> Self {
         Self {
-            active_shares: Arc::new(Mutex::new(HashMap::new())),
+            shares: Arc::new(TokioMutex::new(HashMap::new())),
         }
     }
 }
@@ -95,7 +96,7 @@ pub async fn start_share_handler(
             });
 
             let active_shares = state.active_shares.lock().await;
-            let mut shares = active_shares.active_shares.lock().unwrap();
+            let mut shares = active_shares.shares.lock().await;
             shares.insert(
                 ticket.clone().to_string(),
                 ShareInfo {
@@ -115,8 +116,10 @@ pub async fn start_share_handler(
 
 /// HTTP-endepunkt for GET /shares som lister alle aktive ticket-er.
 pub async fn list_shares_handler(state: web::Data<AppState>) -> impl Responder {
+    check_stale_blobs(&state.active_shares).await;
+    cleanup_stale_blobs(&state.active_shares).await;
     let active_shares = state.active_shares.lock().await;
-    let shares = active_shares.active_shares.lock().unwrap();
+    let shares = active_shares.shares.lock().await;
     let share_info: Vec<ShareInfoResponse> = shares
         .iter()
         .map(|(ticket, info)| ShareInfoResponse {
@@ -135,7 +138,7 @@ pub async fn stop_share_handler(
 ) -> impl Responder {
     let ticket = req.ticket.clone();
     let active_shares = state.active_shares.lock().await;
-    let mut shares = active_shares.active_shares.lock().unwrap();
+    let mut shares = active_shares.shares.lock().await;
     if let Some(info) = shares.remove(&ticket) {
         info.handle.abort();
         // Stopp Iroh-noden
@@ -190,4 +193,28 @@ async fn start_sharing(args: SendArgs) -> Result<(String, iroh::protocol::Router
     );
 
     Ok((share_link, router, blobs))
+}
+
+pub async fn check_stale_blobs(active_shares: &Arc<TokioMutex<ActiveShares>>) -> Vec<String> {
+    let mut stale = Vec::new();
+    let shares = active_shares.lock().await;
+    let inner_shares = shares.shares.lock().await;
+    
+    for (path, share) in inner_shares.iter() {
+        if share.handle.is_finished() {
+            stale.push(path.clone());
+        }
+    }
+    println!("✅ Stale blobs: {:?}", stale);
+    stale
+}
+
+pub async fn cleanup_stale_blobs(active_shares: &Arc<TokioMutex<ActiveShares>>) {
+    let stale = check_stale_blobs(active_shares).await;
+    let mut shares = active_shares.lock().await;
+    let mut inner_shares = shares.shares.lock().await;
+    println!("✅ Stale blobs: {:?}", stale);
+    for path in stale {
+        inner_shares.remove(&path);
+    }
 }

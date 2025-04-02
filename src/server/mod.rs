@@ -59,9 +59,10 @@ pub async fn setup_directories(config: &Arc<Config>) -> Result<()> {
     // Definer public og private kataloger
     let public_dir = sync_dir.join("public");
     let private_dir = sync_dir.join("private");
+    let downloads_dir = sync_dir.join("downloads");
 
     // Opprett kataloger
-    for dir in &[&public_dir, &private_dir] {
+    for dir in &[&public_dir, &private_dir, &downloads_dir] {
         match fs::create_dir_all(dir).await {
             Ok(()) => {
                 println!("✅ Directory created or already exists: {}", dir.display());
@@ -184,6 +185,7 @@ pub async fn start_server() -> Result<()> {
     }
 
     println!("✅ Config loaded");
+    println!("✅ Sync directory: {}", config.sync_dir);
 
     let uploaded_files = Arc::new(Mutex::new(HashSet::new()));
     let pinned_cids = Arc::new(Mutex::new(HashMap::new()));
@@ -207,6 +209,7 @@ pub async fn start_server() -> Result<()> {
         )",
         [],
     )?;
+
 
     // Opprett mappe-tabell
     setup_directories_table(&db_conn)?;
