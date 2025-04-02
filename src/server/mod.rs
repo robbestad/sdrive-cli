@@ -1,6 +1,7 @@
 use crate::config::{read_config, Config};
 use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer};
 use anyhow::Result;
+use http::header;
 use reqwest::Client;
 use std::collections::HashSet;
 use std::fmt;
@@ -8,22 +9,24 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::Mutex;
-use http::header;
 mod download;
+use actix_cors::Cors;
 use actix_governor::{Governor, GovernorConfigBuilder};
 use download::{download_file, Args};
-use actix_cors::Cors;
 use rusqlite::{params, Connection};
-
 use std::collections::HashMap;
 mod listfiles;
 use listfiles::list_files_handler;
 mod watch_directory;
 use watch_directory::watch_directory;
 mod directories;
-use directories::{list_directories_handler, setup_directories_table, list_files_in_directory_handler};
+use directories::{
+    list_directories_handler, list_files_in_directory_handler, setup_directories_table,
+};
 mod iroh;
-use iroh::{ActiveShares, start_share_handler, list_shares_handler, stop_share_handler};
+use iroh::{list_shares_handler, start_share_handler, stop_share_handler, ActiveShares};
+use crate::p2p::download_file_from_iroh;
+use crate::DownloadArgsStruct;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -84,67 +87,87 @@ async fn download_handler(
 ) -> Result<HttpResponse, actix_web::Error> {
     // Fjern eventuell "cid=" prefiks hvis den finnes
     let cid = cid.trim_start_matches("cid=");
-    
+    let mut filename = query.filepath.clone().unwrap_or_default();
+    if filename.is_empty() {
+        filename = cid.to_string()  ;
+    }
     if cid.is_empty() {
         return Ok(HttpResponse::BadRequest()
             .body("❌ CID er påkrevd. Eksempel: /download/QmWvMwpQKitV6WsHLMZtpZTDwF4Yr1"));
     }
 
-    let pinned_cids = state.pinned_cids.lock().await;
-    let _filename_from_cache = pinned_cids.get(cid).cloned();
-    drop(pinned_cids);
-
-    let db_conn = state.db_conn.lock().await;
-    let mut stmt = db_conn
-        .prepare("SELECT filename, file_key FROM pinned_files WHERE cid = ?")
-        .unwrap();
-    let (filename, file_key) = match stmt.query_row(params![cid], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-    }) {
-        Ok((filename, file_key)) => (filename, file_key),
-        Err(_) => {
-            return Ok(
-                HttpResponse::NotFound().body(format!("❌ CID {} is not pinned locally", cid))
-            )
-        }
-    };
-
-    // Bruk file_key fra databasen hvis ingen key er sendt i query
-    let key = query.key.clone().or(file_key.clone());
-
-    println!("🔍 Received key in handler: {:?}", query.key);
-    println!("🔍 DB key: {:?}", file_key);
-    println!("🔍 Using key (from query or DB): {:?}", key);
-
-    // Opprett temp-mappe hvis den ikke finnes
-    let temp_dir = PathBuf::from(&state.config.sync_dir).join("temp");
-    if let Err(e) = fs::create_dir_all(&temp_dir).await {
-        return Ok(HttpResponse::InternalServerError().body(format!("❌ Failed to create temp directory: {}", e)));
-    }
-
-    let args = Args {
-        output: None,
-        key,
-        filename: filename.clone(), // Bruk originalt filnavn
-        filepath: query.filepath.clone().unwrap_or_default(),
-    };
-
-    match download_file(&state.client, cid, &args, &state.config).await {
-        Ok(data) => {
-            let filename = if !args.filepath.is_empty() {
-                args.filepath.clone()
-            } else {
-                filename
+    match cid.starts_with("blob") {
+        true => {
+            let download_args = DownloadArgsStruct {
+                filename: String::new(),
+                output: Some(PathBuf::from(&state.config.sync_dir).join("downloads/").join(filename)),
+                key: None,
+                filepath: String::new(),
             };
+            let data = download_file_from_iroh(&cid, &download_args).await
+                .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
             Ok(HttpResponse::Ok()
                 .content_type("application/octet-stream")
-                .append_header((
-                    "Content-Disposition",
-                    format!("attachment; filename=\"{}\"", filename),
-                ))
                 .body(data))
         }
-        Err(e) => Ok(HttpResponse::NotFound().body(format!("❌ Nedlasting feilet: {}", e))),
+        false => {
+            let pinned_cids = state.pinned_cids.lock().await;
+            let _filename_from_cache = pinned_cids.get(cid).cloned();
+            drop(pinned_cids);
+
+            let db_conn = state.db_conn.lock().await;
+            let mut stmt = db_conn
+                .prepare("SELECT filename, file_key FROM pinned_files WHERE cid = ?")
+                .unwrap();
+            let (filename, file_key) = match stmt.query_row(params![cid], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            }) {
+                Ok((filename, file_key)) => (filename, file_key),
+                Err(_) => {
+                    return Ok(HttpResponse::NotFound()
+                        .body(format!("❌ CID {} is not pinned locally", cid)))
+                }
+            };
+
+            // Bruk file_key fra databasen hvis ingen key er sendt i query
+            let key = query.key.clone().or(file_key.clone());
+
+            println!("🔍 Received key in handler: {:?}", query.key);
+            println!("🔍 DB key: {:?}", file_key);
+            println!("🔍 Using key (from query or DB): {:?}", key);
+
+            // Opprett temp-mappe hvis den ikke finnes
+            let temp_dir = PathBuf::from(&state.config.sync_dir).join("temp");
+            if let Err(e) = fs::create_dir_all(&temp_dir).await {
+                return Ok(HttpResponse::InternalServerError()
+                    .body(format!("❌ Failed to create temp directory: {}", e)));
+            }
+
+            let args = Args {
+                output: None,
+                key,
+                filename: filename.clone(), // Bruk originalt filnavn
+                filepath: query.filepath.clone().unwrap_or_default(),
+            };
+
+            match download_file(&state.client, cid, &args, &state.config).await {
+                Ok(data) => {
+                    let filename = if !args.filepath.is_empty() {
+                        args.filepath.clone()
+                    } else {
+                        filename
+                    };
+                    Ok(HttpResponse::Ok()
+                        .content_type("application/octet-stream")
+                        .append_header((
+                            "Content-Disposition",
+                            format!("attachment; filename=\"{}\"", filename),
+                        ))
+                        .body(data))
+                }
+                Err(e) => Ok(HttpResponse::NotFound().body(format!("❌ Nedlasting feilet: {}", e))),
+            }
+        }
     }
 }
 
@@ -170,7 +193,7 @@ pub async fn start_server() -> Result<()> {
     let db_path = format!("{}/.sdrive.db", config.sync_dir);
     let db_conn = Connection::open(&db_path)
         .map_err(|e| anyhow::anyhow!("Failed to open SQLite database: {}", e))?;
-    
+
     // Opprett tabeller
     db_conn.execute(
         "CREATE TABLE IF NOT EXISTS pinned_files (
@@ -211,7 +234,7 @@ pub async fn start_server() -> Result<()> {
                 pinned_cids,
                 &db_conn,
                 &client,
-                &config
+                &config,
             )
             .await;
         }
@@ -258,7 +281,7 @@ pub async fn start_server() -> Result<()> {
         println!("❌ Failed to bind to port {}: {}", port, e);
         e
     })?;
-    
+
     println!("✅ Server bound successfully, starting...");
     println!("🚀 Server is now running on http://0.0.0.0:{}", port);
     println!("📝 Available endpoints:");
@@ -270,7 +293,7 @@ pub async fn start_server() -> Result<()> {
     println!("   - GET /shares - List active Iroh shares");
     println!("   - POST /share/stop - Stop an active Iroh share");
     println!("👀 Press Ctrl+C to stop the server");
-    
+
     let server = server.run();
 
     tokio::select! {
