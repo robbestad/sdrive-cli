@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::task::JoinHandle;
@@ -211,7 +211,7 @@ pub async fn check_stale_blobs(active_shares: &Arc<TokioMutex<ActiveShares>>) ->
 
 pub async fn cleanup_stale_blobs(active_shares: &Arc<TokioMutex<ActiveShares>>) {
     let stale = check_stale_blobs(active_shares).await;
-    let mut shares = active_shares.lock().await;
+    let shares = active_shares.lock().await;
     let mut inner_shares = shares.shares.lock().await;
     println!("✅ Stale blobs: {:?}", stale);
     for path in stale {

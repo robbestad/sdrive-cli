@@ -15,7 +15,6 @@ SDRIVE CLI is a powerful command-line tool designed for secure file sharing with
   <li><strong>🌐 P2P File Sharing</strong>: Share files directly using Iroh protocol</li>
   <li><strong>🔐 Secure Key Management</strong>: Master keys stored in system keyring</li>
   <li><strong>🚀 Multiple Upload/Download Options</strong>: Support for both SDrive and P2P protocols</li>
-  <li><strong>📝 Flexible Configuration</strong>: Customizable settings for sync directories and API access</li>
 </ul>
 
 ## Installation

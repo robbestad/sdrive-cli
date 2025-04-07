@@ -290,6 +290,7 @@ pub async fn upload_file(
                 .header("Content-Type", "application/json")
                 .json(&json!({
                     "fileName": file_name,
+		    "account_id": user_guid,
                     "guid": file_guid,
                     "fileSize": file_size,
                     "fileIndex": 0,
@@ -309,6 +310,7 @@ pub async fn upload_file(
                     "storageNetwork": "ipfs",
                     "apikey": api_key,
                     "user_guid": user_guid,
+		    "owner": user_guid
                 }))
                 .send()
                 .await?;
